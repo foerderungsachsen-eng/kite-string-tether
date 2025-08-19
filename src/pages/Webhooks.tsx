@@ -128,7 +128,7 @@ const Webhooks = () => {
                       <Button 
                         size="sm" 
                         className="flex-1"
-                        onClick={() => executeWebhook(webhook.id)}
+                        onClick={() => navigate(`/execute/${webhook.id}`)}
                         disabled={!webhook.is_active}
                       >
                         <Play className="mr-2 h-4 w-4" />

@@ -8,6 +8,7 @@ import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import Webhooks from "./pages/Webhooks";
 import NewWebhook from "./pages/NewWebhook";
+import ExecuteWebhook from "./pages/ExecuteWebhook";
 import History from "./pages/History";
 import Settings from "./pages/Settings";
 import NotFound from "./pages/NotFound";
@@ -34,6 +35,7 @@ const App: React.FC = () => {
             <Route path="/auth" element={<Auth />} />
             <Route path="/webhooks" element={<Webhooks />} />
             <Route path="/webhooks/new" element={<NewWebhook />} />
+            <Route path="/execute/:webhookId" element={<ExecuteWebhook />} />
             <Route path="/history" element={<History />} />
             <Route path="/settings" element={<Settings />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}

@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { toast } from "@/hooks/use-toast";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
@@ -23,7 +24,9 @@ const NewWebhook = () => {
     method: "POST",
     description: "",
     is_active: true,
-    headers: "{}"
+    headers: "{}",
+    input_type: "TEXT",
+    output_type: "TEXT"
   });
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -67,7 +70,11 @@ const NewWebhook = () => {
           method: formData.method as "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
           description: formData.description || null,
           is_active: formData.is_active,
-          headers: parsedHeaders
+          headers: {
+            ...parsedHeaders,
+            input_type: formData.input_type,
+            output_type: formData.output_type
+          }
         });
 
       if (error) throw error;
@@ -168,6 +175,41 @@ const NewWebhook = () => {
                   />
                 </div>
 
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-3">
+                    <Label>Input-Typ</Label>
+                    <RadioGroup
+                      value={formData.input_type}
+                      onValueChange={(value) => setFormData({ ...formData, input_type: value })}
+                    >
+                      <div className="flex items-center space-x-2">
+                        <RadioGroupItem value="TEXT" id="input-text" />
+                        <Label htmlFor="input-text">Text</Label>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <RadioGroupItem value="FILE" id="input-file" />
+                        <Label htmlFor="input-file">Datei</Label>
+                      </div>
+                    </RadioGroup>
+                  </div>
+
+                  <div className="space-y-3">
+                    <Label>Output-Typ</Label>
+                    <RadioGroup
+                      value={formData.output_type}
+                      onValueChange={(value) => setFormData({ ...formData, output_type: value })}
+                    >
+                      <div className="flex items-center space-x-2">
+                        <RadioGroupItem value="TEXT" id="output-text" />
+                        <Label htmlFor="output-text">Text</Label>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <RadioGroupItem value="FILE" id="output-file" />
+                        <Label htmlFor="output-file">Datei</Label>
+                      </div>
+                    </RadioGroup>
+                  </div>
+                </div>
                 <div className="space-y-2">
                   <Label htmlFor="headers">HTTP-Headers (JSON)</Label>
                   <Textarea
