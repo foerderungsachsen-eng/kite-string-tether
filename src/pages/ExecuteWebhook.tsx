@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { toast } from "@/hooks/use-toast";
 import { ArrowLeft, Play, FileText, Upload, Download } from "lucide-react";
 
+
 interface Webhook {
   id: string;
   name: string;
@@ -32,6 +33,7 @@ const ExecuteWebhook = () => {
   const [textInput, setTextInput] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [executionResult, setExecutionResult] = useState<any>(null);
+  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
 
   useEffect(() => {
     if (user && webhookId) {
@@ -82,6 +84,7 @@ const ExecuteWebhook = () => {
 
     setExecuting(true);
     setExecutionResult(null);
+    setDownloadUrl(null);
 
     try {
       const { data: clientData } = await supabase
@@ -102,6 +105,14 @@ const ExecuteWebhook = () => {
       let payload = null;
       let fileKey = null;
 
+            title: "Upload-Fehler",
+            description: "Datei konnte nicht hochgeladen werden",
+            variant: "destructive",
+          });
+          return;
+        }
+
+        fileKey = uploadData.path;
       // Handle input based on type
       if (webhook.input_type === 'FILE') {
         if (!selectedFile) {
@@ -113,22 +124,10 @@ const ExecuteWebhook = () => {
           return;
         }
         
-        // Upload file to Supabase Storage (you'll need to set up storage bucket)
-        const fileName = `${Date.now()}-${selectedFile.name}`;
-        const { data: uploadData, error: uploadError } = await supabase.storage
-          .from('webhook-files')
-          .upload(fileName, selectedFile);
-
-        if (uploadError) {
-          toast({
-            title: "Upload-Fehler",
-            description: "Datei konnte nicht hochgeladen werden",
-            variant: "destructive",
-          });
-          return;
-        }
-
-        fileKey = uploadData.path;
+        // For file input, we'll send the file as FormData
+        const formData = new FormData();
+        formData.append('file', selectedFile);
+        payload = formData;
       } else {
         payload = textInput;
       }
@@ -164,23 +163,20 @@ const ExecuteWebhook = () => {
       
       try {
         // Prepare headers
-        const headers: Record<string, string> = {
-          'Content-Type': 'application/json',
-          ...webhook.headers
-        };
+        const headers: Record<string, string> = { ...webhook.headers };
         
         // Remove internal headers that shouldn't be sent to the webhook
         delete headers.input_type;
         delete headers.output_type;
         
-        // Prepare request body based on input type
+        // Set content type based on input type
         let requestBody;
         if (webhook.input_type === 'FILE') {
-          // For file uploads, we would need to handle multipart/form-data
-          // For now, we'll send the file key as JSON
-          requestBody = JSON.stringify({ file_key: fileKey });
+          // For file uploads, use FormData (don't set Content-Type, let browser set it)
+          requestBody = payload;
         } else {
           // For text input, send as JSON
+          headers['Content-Type'] = 'application/json';
           requestBody = JSON.stringify({ data: payload });
         }
         
@@ -193,13 +189,44 @@ const ExecuteWebhook = () => {
         
         statusCode = response.status;
         
-        // Try to parse response as JSON, fallback to text
+        // Check if response is a file (binary data)
         const contentType = response.headers.get('content-type');
-        if (contentType && contentType.includes('application/json')) {
-          webhookResponse = await response.json();
+        const contentDisposition = response.headers.get('content-disposition');
+        
+        if (webhook.output_type === 'FILE' || 
+            contentDisposition?.includes('attachment') ||
+            (contentType && !contentType.includes('application/json') && !contentType.includes('text/'))) {
+        // Make the actual HTTP request to n8n
+        const response = await fetch(webhook.target_url, {
+          method: webhook.method,
+          headers: headers,
+          body: ['GET', 'HEAD'].includes(webhook.method) ? undefined : requestBody,
+        });
+        
+        statusCode = response.status;
+        
+          // Handle file response
+          const blob = await response.blob();
+          const fileName = getFileNameFromResponse(response) || `download_${Date.now()}`;
+          
+          // Create download URL
+          const url = window.URL.createObjectURL(blob);
+          setDownloadUrl(url);
+          
+          webhookResponse = {
+            type: 'file',
+            fileName: fileName,
+            size: blob.size,
+            contentType: contentType || 'application/octet-stream'
+          };
         } else {
-          const textResponse = await response.text();
-          webhookResponse = { response: textResponse };
+          // Handle text/JSON response
+          if (contentType && contentType.includes('application/json')) {
+            webhookResponse = await response.json();
+          } else {
+            const textResponse = await response.text();
+            webhookResponse = { response: textResponse };
+          }
         }
         
         if (!response.ok) {
@@ -263,6 +290,28 @@ const ExecuteWebhook = () => {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     setSelectedFile(file || null);
+  };
+
+  const getFileNameFromResponse = (response: Response): string | null => {
+    const contentDisposition = response.headers.get('content-disposition');
+    if (contentDisposition) {
+      const match = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+      if (match && match[1]) {
+        return match[1].replace(/['"]/g, '');
+      }
+    }
+    return null;
+  };
+
+  const handleDownload = () => {
+    if (downloadUrl && executionResult?.response?.fileName) {
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = executionResult.response.fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
   };
 
   if (loading) {
@@ -426,7 +475,7 @@ const ExecuteWebhook = () => {
                 
                 <div>
                   <Label className="text-sm font-medium">Antwort von n8n</Label>
-                  <pre className="mt-2 p-4 bg-muted rounded-lg text-sm overflow-auto">
+                  <pre className="mt-2 p-4 bg-muted rounded-lg text-sm overflow-auto max-h-96">
                     {JSON.stringify(executionResult.response, null, 2)}
                   </pre>
                 </div>
@@ -434,10 +483,16 @@ const ExecuteWebhook = () => {
                 {webhook.output_type === 'FILE' && (
                   <div>
                     <Label className="text-sm font-medium">Output-Datei</Label>
-                    <Button variant="outline" size="sm" className="ml-2">
-                      <Download className="w-4 h-4 mr-2" />
-                      Datei herunterladen
-                    </Button>
+                    {executionResult.response?.type === 'file' && downloadUrl ? (
+                      <Button variant="outline" size="sm" className="ml-2" onClick={handleDownload}>
+                        <Download className="w-4 h-4 mr-2" />
+                        {executionResult.response.fileName} herunterladen
+                      </Button>
+                    ) : (
+                      <p className="text-sm text-muted-foreground ml-2">
+                        Keine Datei zum Download verfügbar
+                      </p>
+                    )}
                   </div>
                 )}
               </div>

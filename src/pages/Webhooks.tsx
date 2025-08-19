@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { toast } from "@/hooks/use-toast";
 import { Layout } from "@/components/Layout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -137,7 +138,7 @@ const Webhooks = () => {
                       <Button 
                         size="sm" 
                         variant="outline"
-                        onClick={() => navigate(`/webhooks/${webhook.id}/settings`)}
+                        onClick={() => toast({ title: "Wird bald implementiert", description: "Webhook-Einstellungen kommen in einem zukünftigen Update" })}
                       >
                         <Settings className="h-4 w-4" />
                       </Button>
