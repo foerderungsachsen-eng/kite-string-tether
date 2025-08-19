@@ -156,22 +156,97 @@ const ExecuteWebhook = () => {
         .update({ tokens_balance: clientData.tokens_balance - 1 })
         .eq('id', clientData.id);
 
-      // Simulate webhook execution (in real implementation, you'd call the actual webhook)
-      const mockResponse = {
-        status: 'success',
-        message: 'Webhook executed successfully',
-        timestamp: new Date().toISOString(),
-        data: webhook.input_type === 'FILE' ? 'File processed' : `Processed: ${payload}`
-      };
+      // Actually call the webhook
+      let webhookResponse;
+      let statusCode = 200;
+      let executionStatus: 'SUCCESS' | 'ERROR' | 'TIMEOUT' = 'SUCCESS';
+      const startTime = Date.now();
+      
+      try {
+        // Prepare headers
+        const headers: Record<string, string> = {
+          'Content-Type': 'application/json',
+          ...webhook.headers
+        };
+        
+        // Remove internal headers that shouldn't be sent to the webhook
+        delete headers.input_type;
+        delete headers.output_type;
+        
+        // Prepare request body based on input type
+        let requestBody;
+        if (webhook.input_type === 'FILE') {
+          // For file uploads, we would need to handle multipart/form-data
+          // For now, we'll send the file key as JSON
+          requestBody = JSON.stringify({ file_key: fileKey });
+        } else {
+          // For text input, send as JSON
+          requestBody = JSON.stringify({ data: payload });
+        }
+        
+        // Make the actual HTTP request to n8n
+        const response = await fetch(webhook.target_url, {
+          method: webhook.method,
+          headers: headers,
+          body: ['GET', 'HEAD'].includes(webhook.method) ? undefined : requestBody,
+        });
+        
+        statusCode = response.status;
+        
+        // Try to parse response as JSON, fallback to text
+        const contentType = response.headers.get('content-type');
+        if (contentType && contentType.includes('application/json')) {
+          webhookResponse = await response.json();
+        } else {
+          const textResponse = await response.text();
+          webhookResponse = { response: textResponse };
+        }
+        
+        if (!response.ok) {
+          executionStatus = 'ERROR';
+        }
+        
+      } catch (error: any) {
+        console.error('Webhook execution error:', error);
+        executionStatus = 'ERROR';
+        statusCode = 0;
+        webhookResponse = {
+          error: error.message,
+          type: 'network_error'
+        };
+      }
+      
+      const endTime = Date.now();
+      const duration = endTime - startTime;
+      
+      // Update execution record with actual results
+      await supabase
+        .from('executions')
+        .update({
+          status: executionStatus,
+          status_code: statusCode,
+          response: JSON.stringify(webhookResponse),
+          duration_ms: duration,
+          error: executionStatus === 'ERROR' ? JSON.stringify(webhookResponse) : null
+        })
+        .eq('id', executionData.id);
 
       setExecutionResult({
-        execution: executionData,
-        response: mockResponse
+        execution: {
+          ...executionData,
+          status: executionStatus,
+          status_code: statusCode,
+          duration_ms: duration
+        },
+        response: webhookResponse
       });
 
       toast({
-        title: "Webhook ausgeführt",
-        description: "Der Webhook wurde erfolgreich ausgeführt",
+        title: executionStatus === 'SUCCESS' ? "Webhook ausgeführt" : "Webhook-Fehler",
+        description: executionStatus === 'SUCCESS' 
+          ? "Der Webhook wurde erfolgreich ausgeführt"
+          : "Fehler beim Ausführen des Webhooks",
+        variant: executionStatus === 'SUCCESS' ? 'default' : 'destructive'
       });
 
     } catch (error: any) {
@@ -331,11 +406,26 @@ const ExecuteWebhook = () => {
               <div className="space-y-4">
                 <div>
                   <Label className="text-sm font-medium">Status</Label>
-                  <Badge variant="default" className="ml-2">Erfolgreich</Badge>
+                  <Badge 
+                    variant={executionResult.execution.status === 'SUCCESS' ? 'default' : 'destructive'} 
+                    className="ml-2"
+                  >
+                    {executionResult.execution.status === 'SUCCESS' ? 'Erfolgreich' : 'Fehler'}
+                  </Badge>
+                  {executionResult.execution.status_code && (
+                    <Badge variant="outline" className="ml-2">
+                      HTTP {executionResult.execution.status_code}
+                    </Badge>
+                  )}
+                  {executionResult.execution.duration_ms && (
+                    <Badge variant="outline" className="ml-2">
+                      {executionResult.execution.duration_ms}ms
+                    </Badge>
+                  )}
                 </div>
                 
                 <div>
-                  <Label className="text-sm font-medium">Antwort</Label>
+                  <Label className="text-sm font-medium">Antwort von n8n</Label>
                   <pre className="mt-2 p-4 bg-muted rounded-lg text-sm overflow-auto">
                     {JSON.stringify(executionResult.response, null, 2)}
                   </pre>
