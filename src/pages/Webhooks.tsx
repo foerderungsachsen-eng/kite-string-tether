@@ -11,6 +11,7 @@ import { useNavigate } from "react-router-dom";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
+import { Separator } from "@/components/ui/separator";
 
 interface Webhook {
   id: string;
@@ -27,18 +28,20 @@ interface Webhook {
   client_email?: string;
 }
 
-interface Client {
+interface ClientWithWebhooks {
   id: string;
   name: string;
   user_id: string;
   email?: string;
+  webhooks: Webhook[];
 }
 
 const Webhooks = () => {
   const { user, isAdmin } = useAuth();
   const navigate = useNavigate();
-  const [webhooks, setWebhooks] = useState<Webhook[]>([]);
-  const [clients, setClients] = useState<Client[]>([]);
+  const [clientsWithWebhooks, setClientsWithWebhooks] = useState<ClientWithWebhooks[]>([]);
+  const [userWebhooks, setUserWebhooks] = useState<Webhook[]>([]);
+  const [allClients, setAllClients] = useState<ClientWithWebhooks[]>([]);
   const [loading, setLoading] = useState(true);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [editClientDialogOpen, setEditClientDialogOpen] = useState(false);
@@ -49,124 +52,101 @@ const Webhooks = () => {
 
   useEffect(() => {
     if (user) {
-      fetchWebhooks();
       if (isAdmin) {
-        fetchClients();
+        fetchAllClientsWithWebhooks();
+      } else {
+        fetchUserWebhooks();
       }
     }
-  }, [user]);
+  }, [user, isAdmin]);
 
-  const fetchClients = async () => {
+  const fetchAllClientsWithWebhooks = async () => {
     try {
-      // Get all active clients
+      console.log('Fetching all clients with webhooks...');
+      
+      // Get all clients
       const { data: clientsData, error: clientsError } = await supabase
         .from('clients')
         .select('id, name, user_id')
-        .eq('is_active', true)
         .order('name');
 
       if (clientsError) throw clientsError;
+      console.log('Found clients:', clientsData?.length || 0);
 
-      // Get profile information for each client
-      const clientsWithProfiles = await Promise.all(
+      // Get profile information and webhooks for each client
+      const clientsWithWebhooksData = await Promise.all(
         (clientsData || []).map(async (client) => {
+          // Get profile info
           const { data: profileData } = await supabase
             .from('profiles')
             .select('email')
             .eq('user_id', client.user_id)
             .single();
 
+          // Get webhooks for this client
+          const { data: webhooksData } = await supabase
+            .from('webhooks')
+            .select('*')
+            .eq('client_id', client.id)
+            .order('created_at', { ascending: false });
+
+          console.log(`Client ${client.name} has ${webhooksData?.length || 0} webhooks`);
+
           return {
             id: client.id,
             name: client.name,
             user_id: client.user_id,
-            email: profileData?.email || 'No email'
+            email: profileData?.email || 'No email',
+            webhooks: webhooksData || []
           };
         })
       );
 
-      setClients(clientsWithProfiles);
+      setClientsWithWebhooks(clientsWithWebhooksData);
+      setAllClients(clientsWithWebhooksData);
+      console.log('Total clients with webhooks:', clientsWithWebhooksData.length);
     } catch (error) {
-      console.error('Error fetching clients:', error);
+      console.error('Error fetching clients with webhooks:', error);
+      toast({
+        title: "Fehler beim Laden",
+        description: "Clients und Webhooks konnten nicht geladen werden.",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
     }
   };
 
-  const fetchWebhooks = async () => {
+  const fetchUserWebhooks = async () => {
     if (!user) return;
 
     try {
-      if (isAdmin) {
-        // Admins see ALL webhooks - force query without RLS restrictions
-        const { data, error } = await supabase
-          .from('webhooks')
-          .select('*')
-          .order('created_at', { ascending: false });
+      // Regular users see only their assigned webhooks
+      const { data: clientData } = await supabase
+        .from('clients')
+        .select('id')
+        .eq('user_id', user.id)
+        .single();
 
-        if (error) throw error;
-        
-        console.log('Admin fetched webhooks:', data); // Debug log
-        
-        // Get client information for each webhook
-        const webhooksWithClients = await Promise.all(
-          (data || []).map(async (webhook) => {
-            try {
-              const { data: clientData } = await supabase
-                .from('clients')
-                .select('name, user_id')
-                .eq('id', webhook.client_id)
-                .single();
-              
-              if (clientData) {
-                const { data: profileData } = await supabase
-                  .from('profiles')
-                  .select('email')
-                  .eq('user_id', clientData.user_id)
-                  .single();
-                
-                return {
-                  ...webhook,
-                  client_name: clientData.name,
-                  client_email: profileData?.email || 'No email'
-                };
-              }
-              return webhook;
-            } catch (error) {
-              console.error('Error fetching client data for webhook:', webhook.id, error);
-              return webhook;
-            }
-          })
-        );
-        
-        console.log('Webhooks with client data:', webhooksWithClients); // Debug log
-        setWebhooks(webhooksWithClients);
-      } else {
-        // Regular users see only their assigned webhooks
-        const { data: clientData } = await supabase
-          .from('clients')
-          .select('id')
-          .eq('user_id', user.id)
-          .single();
-
-        if (!clientData) {
-          setWebhooks([]);
-          return;
-        }
-
-        // Get webhooks for this client
-        const { data, error } = await supabase
-          .from('webhooks')
-          .select('*')
-          .eq('client_id', clientData.id)
-          .order('created_at', { ascending: false });
-          
-        if (error) throw error;
-        setWebhooks(data || []);
+      if (!clientData) {
+        setUserWebhooks([]);
+        return;
       }
+
+      // Get webhooks for this client
+      const { data, error } = await supabase
+        .from('webhooks')
+        .select('*')
+        .eq('client_id', clientData.id)
+        .order('created_at', { ascending: false });
+        
+      if (error) throw error;
+      setUserWebhooks(data || []);
     } catch (error) {
-      console.error('Error fetching webhooks:', error);
+      console.error('Error fetching user webhooks:', error);
       toast({
         title: "Fehler beim Laden der Webhooks",
-        description: `Die Webhooks konnten nicht geladen werden: ${error.message}`,
+        description: "Ihre Webhooks konnten nicht geladen werden.",
         variant: "destructive"
       });
     } finally {
@@ -193,7 +173,7 @@ const Webhooks = () => {
 
       setDeleteDialogOpen(false);
       setSelectedWebhook(null);
-      fetchWebhooks(); // Refresh the list
+      isAdmin ? fetchAllClientsWithWebhooks() : fetchUserWebhooks(); // Refresh the list
     } catch (error: any) {
       toast({
         title: "Fehler beim Löschen",
@@ -225,7 +205,7 @@ const Webhooks = () => {
       setEditClientDialogOpen(false);
       setSelectedWebhook(null);
       setSelectedClientId("");
-      fetchWebhooks(); // Refresh the list
+      isAdmin ? fetchAllClientsWithWebhooks() : fetchUserWebhooks(); // Refresh the list
     } catch (error: any) {
       toast({
         title: "Fehler beim Ändern",
@@ -248,12 +228,11 @@ const Webhooks = () => {
     setEditClientDialogOpen(true);
   };
 
-  const executeWebhook = (webhookId: string) => {
-    navigate(`/execute/${webhookId}`);
-  };
-
-  const manageAssignments = (webhookId: string) => {
-    navigate(`/webhooks/${webhookId}/assignments`);
+  const getTotalWebhooks = () => {
+    if (isAdmin) {
+      return clientsWithWebhooks.reduce((total, client) => total + client.webhooks.length, 0);
+    }
+    return userWebhooks.length;
   };
 
   return (
@@ -282,10 +261,9 @@ const Webhooks = () => {
           </div>
         </div>
 
-        {/* Debug info for admin */}
         {isAdmin && (
           <div className="text-sm text-muted-foreground">
-            Debug: Gefundene Webhooks: {webhooks.length}
+            Gefundene Clients: {clientsWithWebhooks.length} | Gesamt Webhooks: {getTotalWebhooks()}
           </div>
         )}
 
@@ -293,7 +271,7 @@ const Webhooks = () => {
           <div className="flex items-center justify-center h-96">
             <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-primary"></div>
           </div>
-        ) : webhooks.length === 0 ? (
+        ) : (isAdmin ? getTotalWebhooks() === 0 : userWebhooks.length === 0) ? (
           <Card>
             <CardHeader>
               <CardTitle>
@@ -316,85 +294,139 @@ const Webhooks = () => {
             )}
           </Card>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {webhooks.map((webhook) => (
-              <Card key={webhook.id}>
-                <CardHeader>
-                  <div className="flex items-center justify-between">
-                    <CardTitle className="text-lg">{webhook.name}</CardTitle>
-                    <div className="flex gap-2">
-                      <Badge variant={webhook.is_active ? "default" : "secondary"}>
-                        {webhook.is_active ? "Aktiv" : "Inaktiv"}
-                      </Badge>
-                      {isAdmin && webhook.assigned_users !== undefined && (
-                        <Badge variant="outline">
-                          {webhook.assigned_users} Benutzer
-                        </Badge>
-                      )}
-                    </div>
+          <div className="space-y-8">
+            {isAdmin ? (
+              // Admin view: Show clients with their webhooks
+              clientsWithWebhooks.map((client) => (
+                <div key={client.id} className="space-y-4">
+                  <div className="flex items-center gap-4">
+                    <h2 className="text-xl font-semibold">{client.name}</h2>
+                    <Badge variant="outline">{client.email}</Badge>
+                    <Badge variant="secondary">{client.webhooks.length} Webhooks</Badge>
                   </div>
-                  <CardDescription className="line-clamp-2">
-                    {webhook.description || "Keine Beschreibung verfügbar"}
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-3">
-                    <div className="flex items-center gap-2 text-sm">
-                      <Globe className="h-4 w-4 text-muted-foreground" />
-                      <span className="font-mono text-xs break-all">{webhook.target_url}</span>
+                  
+                  {client.webhooks.length === 0 ? (
+                    <Card>
+                      <CardContent className="p-6">
+                        <p className="text-muted-foreground text-center">
+                          Dieser Client hat noch keine Webhooks
+                        </p>
+                      </CardContent>
+                    </Card>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {client.webhooks.map((webhook) => (
+                        <Card key={webhook.id}>
+                          <CardHeader>
+                            <div className="flex items-center justify-between">
+                              <CardTitle className="text-lg">{webhook.name}</CardTitle>
+                              <div className="flex gap-2">
+                                <Badge variant={webhook.is_active ? "default" : "secondary"}>
+                                  {webhook.is_active ? "Aktiv" : "Inaktiv"}
+                                </Badge>
+                              </div>
+                            </div>
+                            <CardDescription className="line-clamp-2">
+                              {webhook.description || "Keine Beschreibung verfügbar"}
+                            </CardDescription>
+                          </CardHeader>
+                          <CardContent>
+                            <div className="space-y-3">
+                              <div className="flex items-center gap-2 text-sm">
+                                <Globe className="h-4 w-4 text-muted-foreground" />
+                                <span className="font-mono text-xs break-all">{webhook.target_url}</span>
+                              </div>
+                              
+                              <div className="flex items-center gap-2 text-sm">
+                                <Badge variant="outline">{webhook.method}</Badge>
+                                <span className="text-muted-foreground">
+                                  {new Date(webhook.created_at).toLocaleDateString('de-DE')}
+                                </span>
+                              </div>
+                              
+                              <div className="flex gap-2 pt-2 flex-wrap">
+                                <Button 
+                                  size="sm" 
+                                  onClick={() => navigate(`/execute/${webhook.id}`)}
+                                  disabled={!webhook.is_active}
+                                >
+                                  <Play className="mr-2 h-4 w-4" />
+                                  Ausführen
+                                </Button>
+                                <Button 
+                                  size="sm" 
+                                  variant="outline"
+                                  onClick={() => openEditClientDialog(webhook)}
+                                >
+                                  <Edit className="h-4 w-4" />
+                                </Button>
+                                <Button 
+                                  size="sm" 
+                                  variant="outline"
+                                  onClick={() => openDeleteDialog(webhook)}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
                     </div>
-                    
-                    {isAdmin && (webhook as any).client_name && (
-                      <div className="flex items-center gap-2 text-sm">
-                        <Badge variant="secondary">
-                          {(webhook as any).client_name}
+                  )}
+                  
+                  {client !== clientsWithWebhooks[clientsWithWebhooks.length - 1] && (
+                    <Separator className="my-8" />
+                  )}
+                </div>
+              ))
+            ) : (
+              // Client view: Show only their webhooks
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {userWebhooks.map((webhook) => (
+                  <Card key={webhook.id}>
+                    <CardHeader>
+                      <div className="flex items-center justify-between">
+                        <CardTitle className="text-lg">{webhook.name}</CardTitle>
+                        <Badge variant={webhook.is_active ? "default" : "secondary"}>
+                          {webhook.is_active ? "Aktiv" : "Inaktiv"}
                         </Badge>
-                        <span className="text-xs text-muted-foreground">
-                          {(webhook as any).client_email}
-                        </span>
                       </div>
-                    )}
-                    
-                    <div className="flex items-center gap-2 text-sm">
-                      <Badge variant="outline">{webhook.method}</Badge>
-                      <span className="text-muted-foreground">
-                        {new Date(webhook.created_at).toLocaleDateString('de-DE')}
-                      </span>
-                    </div>
-                    
-                    <div className="flex gap-2 pt-2 flex-wrap">
-                      <Button 
-                        size="sm" 
-                        className={isAdmin ? "" : "flex-1"}
-                        onClick={() => navigate(`/execute/${webhook.id}`)}
-                        disabled={!webhook.is_active}
-                      >
-                        <Play className="mr-2 h-4 w-4" />
-                        Ausführen
-                      </Button>
-                      {isAdmin && (
-                        <>
+                      <CardDescription className="line-clamp-2">
+                        {webhook.description || "Keine Beschreibung verfügbar"}
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-2 text-sm">
+                          <Globe className="h-4 w-4 text-muted-foreground" />
+                          <span className="font-mono text-xs break-all">{webhook.target_url}</span>
+                        </div>
+                        
+                        <div className="flex items-center gap-2 text-sm">
+                          <Badge variant="outline">{webhook.method}</Badge>
+                          <span className="text-muted-foreground">
+                            {new Date(webhook.created_at).toLocaleDateString('de-DE')}
+                          </span>
+                        </div>
+                        
+                        <div className="flex gap-2 pt-2">
                           <Button 
                             size="sm" 
-                            variant="outline"
-                            onClick={() => manageAssignments(webhook.id)}
+                            className="flex-1"
+                            onClick={() => navigate(`/execute/${webhook.id}`)}
+                            disabled={!webhook.is_active}
                           >
-                            <Users className="h-4 w-4" />
+                            <Play className="mr-2 h-4 w-4" />
+                            Ausführen
                           </Button>
-                          <Button 
-                            size="sm" 
-                            variant="outline"
-                            onClick={() => toast({ title: "Wird bald implementiert", description: "Webhook-Einstellungen kommen in einem zukünftigen Update" })}
-                          >
-                            <Settings className="h-4 w-4" />
-                          </Button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -436,7 +468,7 @@ const Webhooks = () => {
                     <SelectValue placeholder="Client auswählen" />
                   </SelectTrigger>
                   <SelectContent>
-                    {clients.map((client) => (
+                    {allClients.map((client) => (
                       <SelectItem key={client.id} value={client.id}>
                         {client.name} ({client.email})
                       </SelectItem>
