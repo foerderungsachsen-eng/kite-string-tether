@@ -189,7 +189,7 @@ export type Database = {
           email: string
           id: string
           role: Database["public"]["Enums"]["user_role"]
-          skip_email_verification: boolean | null
+          skip_email_verification: boolean
           updated_at: string
           user_id: string
         }
@@ -198,7 +198,7 @@ export type Database = {
           email: string
           id?: string
           role?: Database["public"]["Enums"]["user_role"]
-          skip_email_verification?: boolean | null
+          skip_email_verification?: boolean
           updated_at?: string
           user_id: string
         }
@@ -207,7 +207,7 @@ export type Database = {
           email?: string
           id?: string
           role?: Database["public"]["Enums"]["user_role"]
-          skip_email_verification?: boolean | null
+          skip_email_verification?: boolean
           updated_at?: string
           user_id?: string
         }

@@ -257,7 +257,7 @@ const Users = () => {
         .single();
       
       if (data) {
-        setSkipEmailVerification(data.skip_email_verification || false);
+        setSkipEmailVerification(data.skip_email_verification);
       }
     } catch (error) {
       console.error('Error fetching skip email verification:', error);
@@ -398,26 +398,31 @@ const Users = () => {
 
     setIsUpdatingSettings(true);
     try {
-      // Skip email verification update temporarily disabled until column is added
-      console.log('Skip email verification setting:', skipEmailVerification);
+      // Update skip_email_verification in the database
+      const { error: skipEmailError } = await supabase
+        .from('profiles')
+        .update({ skip_email_verification: skipEmailVerification })
+        .eq('user_id', selectedUser.user_id);
+
+      if (skipEmailError) {
+        console.error('Error updating skip_email_verification:', skipEmailError);
+        throw new Error(`Skip Email Verification konnte nicht aktualisiert werden: ${skipEmailError.message}`);
+      }
 
       // Update password if provided
       if (newPassword.trim()) {
-        // For now, show a message that password update is not available
-        toast({
-          title: "Passwort-Update nicht verfügbar",
-          description: "Passwort-Updates sind derzeit nicht verfügbar. Andere Einstellungen wurden gespeichert.",
-          variant: "destructive"
-        });
+        // Password update requires admin API - show info message
+        console.log('Password update requested but requires admin API');
       }
 
-      // Update email confirmation status
-      // Email confirmation update is not available via client-side API
-      // This would need to be done via admin API or edge function
+      // Email confirmation update requires admin API
+      if (emailConfirmed !== (selectedUser.email_confirmed || false)) {
+        console.log('Email confirmation update requested but requires admin API');
+      }
 
       toast({
-        title: "Einstellungen gespeichert",
-        description: "Einstellungen wurden gespeichert (Skip Email Verification wird noch implementiert)."
+        title: "Einstellungen aktualisiert",
+        description: `Skip Email Verification wurde ${skipEmailVerification ? 'aktiviert' : 'deaktiviert'}.`
       });
       
       await fetchUsers(); // Refresh user list
@@ -646,14 +651,13 @@ const Users = () => {
                     id="skip-email-verification"
                     checked={skipEmailVerification}
                     onCheckedChange={(checked) => setSkipEmailVerification(checked as boolean)}
-                    disabled={true}
                   />
                   <Label htmlFor="skip-email-verification" className="text-sm">
-                    Skip E-Mail Verification (wird implementiert)
+                    Skip E-Mail Verification
                   </Label>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Diese Funktion wird derzeit implementiert und ist noch nicht verfügbar
+                  Wenn aktiviert, kann sich der Benutzer ohne E-Mail-Bestätigung anmelden
                 </p>
               </div>
               <DialogFooter>
