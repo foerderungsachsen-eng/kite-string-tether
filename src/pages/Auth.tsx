@@ -159,11 +159,22 @@ const Auth = () => {
     console.log('Creating user records for:', userId, email);
     
     try {
+      // Create profile record
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .insert({
+          user_id: userId,
+          email: email,
+          role: 'CLIENT'
+        });
+
+      if (profileError) {
+        console.error('Error creating profile:', profileError);
         throw new Error(`Profil konnte nicht erstellt werden: ${profileError.message}`);
       }
 
       // Also create client record
-          user_id: userId,
+      const { error: clientError } = await supabase
         .from('clients')
         .insert({
           user_id: userId,
@@ -220,7 +231,7 @@ const Auth = () => {
         });
       } else {
         // Also create client record
-          user_id: userId,
+        const { error: clientError } = await supabase
           .from('clients')
           .insert({
             user_id: data.user.id,
