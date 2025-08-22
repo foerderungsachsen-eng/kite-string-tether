@@ -73,27 +73,34 @@ const NewWebhook = () => {
   const fetchClients = async () => {
     try {
       // Get all clients with their profile information
-      const { data: clientsData, error } = await supabase
+      // First get all active clients
+      const { data: clientsData, error: clientsError } = await supabase
         .from('clients')
-        .select(`
-          id,
-          name,
-          user_id,
-          profiles!inner(email)
-        `)
+        .select('id, name, user_id')
         .eq('is_active', true)
         .order('name');
 
-      if (error) throw error;
+      if (clientsError) throw clientsError;
 
-      const formattedClients = (clientsData || []).map(client => ({
-        id: client.id,
-        name: client.name,
-        user_id: client.user_id,
-        email: (client.profiles as any)?.email
-      }));
+      // Then get profile information for each client
+      const clientsWithProfiles = await Promise.all(
+        (clientsData || []).map(async (client) => {
+          const { data: profileData } = await supabase
+            .from('profiles')
+            .select('email')
+            .eq('user_id', client.user_id)
+            .single();
 
-      setClients(formattedClients);
+          return {
+            id: client.id,
+            name: client.name,
+            user_id: client.user_id,
+            email: profileData?.email || 'No email'
+          };
+        })
+      );
+
+      setClients(clientsWithProfiles);
     } catch (error) {
       console.error('Error fetching clients:', error);
       toast({
