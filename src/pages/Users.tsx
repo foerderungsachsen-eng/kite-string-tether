@@ -54,6 +54,7 @@ const Users = () => {
   const [newTokenBalance, setNewTokenBalance] = useState("");
   const [isDeletingUser, setIsDeletingUser] = useState(false);
   const [isUpdatingTokens, setIsUpdatingTokens] = useState(false);
+  const [skipEmailVerification, setSkipEmailVerification] = useState(false);
 
   useEffect(() => {
     if (user && isAdmin) {
@@ -240,6 +241,7 @@ const Users = () => {
     setSelectedUser(user);
     setNewPassword("");
     setEmailConfirmed(user.email_confirmed || false);
+    setSkipEmailVerification(user.skip_email_verification || false);
     setIsSettingsDialogOpen(true);
   };
 
@@ -274,6 +276,16 @@ const Users = () => {
 
   const deleteUser = async () => {
     if (!selectedUser) return;
+
+    // Prevent admin from deleting their own account
+    if (selectedUser.user_id === user?.id) {
+      toast({
+        title: "Aktion nicht erlaubt",
+        description: "Sie können Ihr eigenes Konto nicht löschen.",
+        variant: "destructive",
+      });
+      return;
+    }
 
     setIsDeletingUser(true);
     try {
@@ -367,6 +379,20 @@ const Users = () => {
     setIsUpdatingSettings(true);
     try {
       let hasUpdates = false;
+
+      // Update skip email verification in profiles table
+      if (skipEmailVerification !== (selectedUser.skip_email_verification || false)) {
+        const { error: skipEmailError } = await supabase
+          .from('profiles')
+          .update({ skip_email_verification: skipEmailVerification })
+          .eq('user_id', selectedUser.user_id);
+
+        if (skipEmailError) {
+          console.error('Error updating skip email verification:', skipEmailError);
+          throw new Error(`Skip Email Verification konnte nicht aktualisiert werden: ${skipEmailError.message}`);
+        }
+        hasUpdates = true;
+      }
 
       // Update password if provided
       if (newPassword.trim()) {
@@ -633,6 +659,20 @@ const Users = () => {
                     E-Mail bestätigt
                   </Label>
                 </div>
+                
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="skip-email-verification"
+                    checked={skipEmailVerification}
+                    onCheckedChange={(checked) => setSkipEmailVerification(checked as boolean)}
+                  />
+                  <Label htmlFor="skip-email-verification" className="text-sm">
+                    Skip E-Mail Verification
+                  </Label>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Aktivieren Sie diese Option, damit sich der Benutzer ohne E-Mail-Bestätigung anmelden kann
+                </p>
                 <p className="text-xs text-muted-foreground">
                   Aktivieren Sie diese Option, um die E-Mail-Adresse des Benutzers manuell zu bestätigen
                 </p>
@@ -799,6 +839,7 @@ const Users = () => {
                         size="sm" 
                         variant="destructive"
                         onClick={() => openDeleteUserDialog(userProfile)}
+                        disabled={userProfile.user_id === user?.id}
                       >
                         <Trash2 className="h-4 w-4 mr-2" />
                         Löschen

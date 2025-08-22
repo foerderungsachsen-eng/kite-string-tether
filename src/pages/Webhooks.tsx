@@ -49,6 +49,18 @@ const Webhooks = () => {
   const [selectedClientId, setSelectedClientId] = useState("");
   const [isDeleting, setIsDeleting] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [editWebhookDialogOpen, setEditWebhookDialogOpen] = useState(false);
+  const [editFormData, setEditFormData] = useState({
+    name: "",
+    target_url: "",
+    method: "POST",
+    description: "",
+    headers: "{}",
+    input_type: "TEXT",
+    output_type: "TEXT"
+  });
+  const [isEditingWebhook, setIsEditingWebhook] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -228,12 +240,85 @@ const Webhooks = () => {
     setEditClientDialogOpen(true);
   };
 
+  const openEditWebhookDialog = (webhook: Webhook) => {
+    setSelectedWebhook(webhook);
+    setEditFormData({
+      name: webhook.name,
+      target_url: webhook.target_url,
+      method: webhook.method,
+      description: webhook.description || "",
+      headers: JSON.stringify(webhook.headers || {}, null, 2),
+      input_type: webhook.headers?.input_type || "TEXT",
+      output_type: webhook.headers?.output_type || "TEXT"
+    });
+    setEditWebhookDialogOpen(true);
+  };
+
+  const updateWebhook = async () => {
+    if (!selectedWebhook) return;
+
+    setIsEditingWebhook(true);
+    try {
+      // Validate JSON headers
+      let parsedHeaders = {};
+      try {
+        parsedHeaders = JSON.parse(editFormData.headers);
+      } catch (error) {
+        toast({
+          title: "Ungültige Headers",
+          description: "Headers müssen gültiges JSON sein",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const { error } = await supabase
+        .from('webhooks')
+        .update({
+          name: editFormData.name,
+          target_url: editFormData.target_url,
+          method: editFormData.method as "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
+          description: editFormData.description || null,
+          headers: {
+            ...parsedHeaders,
+            input_type: editFormData.input_type,
+            output_type: editFormData.output_type
+          }
+        })
+        .eq('id', selectedWebhook.id);
+
+      if (error) throw error;
+
+      toast({
+        title: "Webhook aktualisiert",
+        description: `Webhook "${editFormData.name}" wurde erfolgreich aktualisiert.`,
+      });
+
+      setEditWebhookDialogOpen(false);
+      setSelectedWebhook(null);
+      isAdmin ? fetchAllClientsWithWebhooks() : fetchUserWebhooks();
+    } catch (error: any) {
+      toast({
+        title: "Fehler beim Aktualisieren",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setIsEditingWebhook(false);
+    }
+  };
+
   const getTotalWebhooks = () => {
     if (isAdmin) {
       return clientsWithWebhooks.reduce((total, client) => total + client.webhooks.length, 0);
     }
     return userWebhooks.length;
   };
+
+  const filteredClientsWithWebhooks = clientsWithWebhooks.filter(client =>
+    client.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    client.email.toLowerCase().includes(searchTerm.toLowerCase())
+  );
 
   return (
     <Layout>
@@ -262,8 +347,22 @@ const Webhooks = () => {
         </div>
 
         {isAdmin && (
+          <div className="flex items-center gap-4">
+            <div className="relative flex-1 max-w-md">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Klient suchen (Name oder E-Mail)..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-10"
+              />
+            </div>
+          </div>
+        )}
+
+        {isAdmin && (
           <div className="text-sm text-muted-foreground">
-            Gefundene Clients: {clientsWithWebhooks.length} | Gesamt Webhooks: {getTotalWebhooks()}
+            Gefundene Clients: {filteredClientsWithWebhooks.length} | Gesamt Webhooks: {getTotalWebhooks()}
           </div>
         )}
 
@@ -297,7 +396,7 @@ const Webhooks = () => {
           <div className="space-y-8">
             {isAdmin ? (
               // Admin view: Show clients with their webhooks
-              clientsWithWebhooks.map((client) => (
+              filteredClientsWithWebhooks.map((client) => (
                 <div key={client.id} className="space-y-4">
                   <div className="flex items-center gap-4">
                     <h2 className="text-xl font-semibold">{client.name}</h2>
@@ -356,6 +455,13 @@ const Webhooks = () => {
                                 <Button 
                                   size="sm" 
                                   variant="outline"
+                                  onClick={() => openEditWebhookDialog(webhook)}
+                                >
+                                  <Settings className="h-4 w-4" />
+                                </Button>
+                                <Button 
+                                  size="sm" 
+                                  variant="outline"
                                   onClick={() => openEditClientDialog(webhook)}
                                 >
                                   <Edit className="h-4 w-4" />
@@ -398,16 +504,9 @@ const Webhooks = () => {
                     </CardHeader>
                     <CardContent>
                       <div className="space-y-3">
-                        <div className="flex items-center gap-2 text-sm">
-                          <Globe className="h-4 w-4 text-muted-foreground" />
-                          <span className="font-mono text-xs break-all">{webhook.target_url}</span>
-                        </div>
-                        
-                        <div className="flex items-center gap-2 text-sm">
-                          <Badge variant="outline">{webhook.method}</Badge>
-                          <span className="text-muted-foreground">
-                            {new Date(webhook.created_at).toLocaleDateString('de-DE')}
-                          </span>
+                        {/* Hide webhook details from clients */}
+                        <div className="text-sm text-muted-foreground">
+                          Erstellt: {new Date(webhook.created_at).toLocaleDateString('de-DE')}
                         </div>
                         
                         <div className="flex gap-2 pt-2">
@@ -483,6 +582,127 @@ const Webhooks = () => {
               </Button>
               <Button onClick={updateWebhookClient} disabled={isUpdating || !selectedClientId}>
                 {isUpdating ? "Ändere..." : "Client ändern"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Edit Webhook Dialog */}
+        <Dialog open={editWebhookDialogOpen} onOpenChange={setEditWebhookDialogOpen}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>Webhook bearbeiten</DialogTitle>
+              <DialogDescription>
+                Bearbeiten Sie die Einstellungen für "{selectedWebhook?.name}".
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 max-h-96 overflow-y-auto">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="edit-name">Name</Label>
+                  <Input
+                    id="edit-name"
+                    value={editFormData.name}
+                    onChange={(e) => setEditFormData({ ...editFormData, name: e.target.value })}
+                    placeholder="Webhook-Name"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-method">HTTP-Methode</Label>
+                  <Select
+                    value={editFormData.method}
+                    onValueChange={(value) => setEditFormData({ ...editFormData, method: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="POST">POST</SelectItem>
+                      <SelectItem value="PUT">PUT</SelectItem>
+                      <SelectItem value="PATCH">PATCH</SelectItem>
+                      <SelectItem value="DELETE">DELETE</SelectItem>
+                      <SelectItem value="GET">GET</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              
+              <div className="space-y-2">
+                <Label htmlFor="edit-target-url">Ziel-URL</Label>
+                <Input
+                  id="edit-target-url"
+                  type="url"
+                  value={editFormData.target_url}
+                  onChange={(e) => setEditFormData({ ...editFormData, target_url: e.target.value })}
+                  placeholder="https://example.com/webhook"
+                />
+              </div>
+              
+              <div className="space-y-2">
+                <Label htmlFor="edit-description">Beschreibung</Label>
+                <Textarea
+                  id="edit-description"
+                  value={editFormData.description}
+                  onChange={(e) => setEditFormData({ ...editFormData, description: e.target.value })}
+                  placeholder="Optionale Beschreibung"
+                  rows={3}
+                />
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="space-y-3">
+                  <Label>Input-Typ</Label>
+                  <RadioGroup
+                    value={editFormData.input_type}
+                    onValueChange={(value) => setEditFormData({ ...editFormData, input_type: value })}
+                  >
+                    <div className="flex items-center space-x-2">
+                      <RadioGroupItem value="TEXT" id="edit-input-text" />
+                      <Label htmlFor="edit-input-text">Text</Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <RadioGroupItem value="FILE" id="edit-input-file" />
+                      <Label htmlFor="edit-input-file">Datei</Label>
+                    </div>
+                  </RadioGroup>
+                </div>
+                
+                <div className="space-y-3">
+                  <Label>Output-Typ</Label>
+                  <RadioGroup
+                    value={editFormData.output_type}
+                    onValueChange={(value) => setEditFormData({ ...editFormData, output_type: value })}
+                  >
+                    <div className="flex items-center space-x-2">
+                      <RadioGroupItem value="TEXT" id="edit-output-text" />
+                      <Label htmlFor="edit-output-text">Text</Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <RadioGroupItem value="FILE" id="edit-output-file" />
+                      <Label htmlFor="edit-output-file">Datei</Label>
+                    </div>
+                  </RadioGroup>
+                </div>
+              </div>
+              
+              <div className="space-y-2">
+                <Label htmlFor="edit-headers">HTTP-Headers (JSON)</Label>
+                <Textarea
+                  id="edit-headers"
+                  value={editFormData.headers}
+                  onChange={(e) => setEditFormData({ ...editFormData, headers: e.target.value })}
+                  placeholder='{"Content-Type": "application/json"}'
+                  rows={4}
+                  className="font-mono text-sm"
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setEditWebhookDialogOpen(false)}>
+                Abbrechen
+              </Button>
+              <Button onClick={updateWebhook} disabled={isEditingWebhook}>
+                {isEditingWebhook ? "Speichere..." : "Webhook aktualisieren"}
               </Button>
             </DialogFooter>
           </DialogContent>

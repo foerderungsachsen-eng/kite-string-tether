@@ -309,27 +309,25 @@ const ExecuteWebhook = () => {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
+              {/* Input type is now fixed based on webhook settings */}
               <div className="space-y-3">
                 <Label>Eingabetyp</Label>
-                <RadioGroup
-                  value={inputType}
-                  onValueChange={(value: 'TEXT' | 'FILE') => setInputType(value)}
-                >
-                  <div className="flex items-center space-x-2">
-                    <RadioGroupItem value="TEXT" id="input-text" />
-                    <Label htmlFor="input-text" className="flex items-center gap-2">
+                <div className="flex items-center gap-2">
+                  {inputType === 'TEXT' ? (
+                    <Badge variant="default" className="flex items-center gap-2">
                       <FileText className="h-4 w-4" />
                       Text
-                    </Label>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <RadioGroupItem value="FILE" id="input-file" />
-                    <Label htmlFor="input-file" className="flex items-center gap-2">
+                    </Badge>
+                  ) : (
+                    <Badge variant="default" className="flex items-center gap-2">
                       <Upload className="h-4 w-4" />
                       Datei
-                    </Label>
-                  </div>
-                </RadioGroup>
+                    </Badge>
+                  )}
+                  <span className="text-sm text-muted-foreground">
+                    (Vom Administrator festgelegt)
+                  </span>
+                </div>
               </div>
 
               {inputType === 'TEXT' ? (
@@ -437,30 +435,32 @@ const ExecuteWebhook = () => {
           </Card>
         </div>
 
-        {/* Webhook Details */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Webhook-Details</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-              <div>
-                <Label className="text-muted-foreground">Ziel-URL</Label>
-                <p className="font-mono break-all">{webhook.target_url}</p>
-              </div>
-              <div>
-                <Label className="text-muted-foreground">Methode</Label>
-                <p>{webhook.method}</p>
-              </div>
-              {webhook.description && (
-                <div className="md:col-span-2">
-                  <Label className="text-muted-foreground">Beschreibung</Label>
-                  <p>{webhook.description}</p>
+        {/* Webhook Details - Only show to admins */}
+        {isAdmin && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Webhook-Details</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                <div>
+                  <Label className="text-muted-foreground">Ziel-URL</Label>
+                  <p className="font-mono break-all">{webhook.target_url}</p>
                 </div>
-              )}
-            </div>
-          </CardContent>
-        </Card>
+                <div>
+                  <Label className="text-muted-foreground">Methode</Label>
+                  <p>{webhook.method}</p>
+                </div>
+                {webhook.description && (
+                  <div className="md:col-span-2">
+                    <Label className="text-muted-foreground">Beschreibung</Label>
+                    <p>{webhook.description}</p>
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
       </div>
     </Layout>
   );
