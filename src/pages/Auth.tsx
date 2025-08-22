@@ -59,7 +59,46 @@ const Auth = () => {
     setLoading(true);
     
     try {
-      // First, try to sign up the user
+      // Check if user already exists by trying to sign in first
+      const { data: existingUser, error: signInError } = await supabase.auth.signInWithPassword({
+        email,
+        password
+      });
+      
+      if (existingUser.user && !signInError) {
+        // User exists and can sign in, check if profile exists
+        const { data: profileData } = await supabase
+          .from('profiles')
+          .select('id')
+          .eq('user_id', existingUser.user.id)
+          .single();
+        
+        if (!profileData) {
+          // Profile doesn't exist, create it
+          try {
+            await createUserRecords(existingUser.user.id, email);
+            toast({
+              title: "Konto wiederhergestellt",
+              description: "Ihr Konto wurde erfolgreich wiederhergestellt. Sie sind jetzt angemeldet.",
+            });
+          } catch (error: any) {
+            toast({
+              title: "Fehler beim Wiederherstellen",
+              description: "Konto existiert, aber Profil konnte nicht erstellt werden.",
+              variant: "destructive",
+            });
+          }
+        } else {
+          toast({
+            title: "Konto existiert bereits",
+            description: "Sie sind bereits angemeldet.",
+          });
+        }
+        setLoading(false);
+        return;
+      }
+      
+      // User doesn't exist, create new account
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
@@ -72,65 +111,50 @@ const Auth = () => {
       });
       
       if (error) {
-        // If user already exists in auth but not in profiles, we need to handle this case
-        if (error.message.includes('User already registered')) {
-          // Try to sign in the user first to get their ID
-          const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
-            email,
-            password
-          });
-          
-          if (signInError) {
-            toast({
-              title: "Konto existiert bereits",
-              description: "Dieses Konto existiert bereits. Bitte melden Sie sich an oder verwenden Sie eine andere E-Mail-Adresse.",
-              variant: "destructive",
-            });
-            setLoading(false);
-            return;
-          }
-          
-          // User signed in successfully, now create missing profile and client records
-          if (signInData.user) {
-            await createUserRecords(signInData.user.id, email);
-            toast({
-              title: "Konto wiederhergestellt",
-              description: "Ihr Konto wurde erfolgreich wiederhergestellt. Sie sind jetzt angemeldet.",
-            });
-          }
-        } else {
-          toast({
-            title: "Registrierung fehlgeschlagen",
-            description: error.message,
-            variant: "destructive",
-          });
-        }
+        toast({
+          title: "Registrierung fehlgeschlagen",
+          description: error.message,
+          variant: "destructive",
+        });
         setLoading(false);
         return;
       }
       
       if (data.user) {
-        // Wait a moment for the user to be fully created in auth
-        setTimeout(async () => {
-          try {
-            await createUserRecords(data.user.id, email);
-            toast({
-              title: "Registrierung erfolgreich",
-              description: "Konto wurde erfolgreich erstellt. Sie können sich jetzt anmelden.",
-            });
-          } catch (error: any) {
-            console.error('Error creating user records:', error);
-            toast({
-              title: "Registrierung teilweise erfolgreich",
-              description: "Konto wurde erstellt, aber Profil konnte nicht angelegt werden. Versuchen Sie sich anzumelden.",
-              variant: "destructive",
-            });
-          }
-        }, 1000);
+        // Sign in the user immediately after signup
+        const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+          email,
+          password
+        });
+        
+        if (signInError || !signInData.user) {
+          toast({
+            title: "Registrierung erfolgreich",
+            description: "Konto wurde erstellt. Bitte melden Sie sich an.",
+          });
+          setLoading(false);
+          return;
+        }
+        
+        // Now create profile and client records
+        try {
+          await createUserRecords(signInData.user.id, email);
+          toast({
+            title: "Registrierung erfolgreich",
+            description: "Konto wurde erfolgreich erstellt und Sie sind angemeldet.",
+          });
+        } catch (error: any) {
+          console.error('Error creating user records:', error);
+          toast({
+            title: "Registrierung teilweise erfolgreich",
+            description: "Konto wurde erstellt, aber Profil konnte nicht angelegt werden. Sie sind trotzdem angemeldet.",
+            variant: "destructive",
+          });
+        }
       } else {
         toast({
           title: "Registrierung erfolgreich",
-          description: "Konto wurde erfolgreich erstellt. Sie können sich jetzt anmelden.",
+          description: "Konto wurde erstellt. Bitte melden Sie sich an.",
         });
       }
     } catch (error: any) {
@@ -147,38 +171,32 @@ const Auth = () => {
   
   const createUserRecords = async (userId: string, email: string) => {
     try {
-      // First verify the user exists in auth
-      const { data: userData, error: userError } = await supabase.auth.getUser();
-      if (userError || !userData.user) {
-        throw new Error('Benutzer nicht authentifiziert');
-      }
-
-      // Create profile for the user using service role
+      // Create profile for the user
       const { error: profileError } = await supabase
         .from('profiles')
         .insert({
-          user_id: userData.user.id, // Use the actual authenticated user ID
+          user_id: userId,
           email: email,
           role: 'CLIENT'
         });
 
       if (profileError) {
         console.error('Error creating profile:', profileError);
-        throw new Error('Profil konnte nicht erstellt werden: ' + profileError.message);
+        throw new Error(`Profil konnte nicht erstellt werden: ${profileError.message}`);
       }
 
       // Also create client record
       const { error: clientError } = await supabase
         .from('clients')
         .insert({
-          user_id: userData.user.id, // Use the actual authenticated user ID
+          user_id: userId,
           name: email.split('@')[0], // Use email prefix as name
           tokens_balance: 100 // Give new users 100 tokens
         });
 
       if (clientError) {
         console.error('Error creating client:', clientError);
-        throw new Error('Client-Datensatz konnte nicht erstellt werden: ' + clientError.message);
+        throw new Error(`Client-Datensatz konnte nicht erstellt werden: ${clientError.message}`);
       }
     } catch (error: any) {
       console.error('Error in createUserRecords:', error);
