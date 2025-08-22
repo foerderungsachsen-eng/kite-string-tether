@@ -429,7 +429,7 @@ const ExecuteWebhook = () => {
         </div>
       </Layout>
     );
-  };
+  }
 
   return (
     <Layout>
@@ -505,4 +505,165 @@ const ExecuteWebhook = () => {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="flex
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-2xl font-bold">{tokensBalance}</span>
+                  <span className="text-muted-foreground">verfügbare Tokens</span>
+                </div>
+                {hasInsufficientTokens && (
+                  <Badge variant="destructive">
+                    Nicht genügend Tokens
+                  </Badge>
+                )}
+              </div>
+              {hasInsufficientTokens && (
+                <p className="text-sm text-destructive mt-2">
+                  Sie benötigen {webhook.tokens_cost} Token{webhook.tokens_cost !== 1 ? 's' : ''} für diese Ausführung, 
+                  haben aber nur {tokensBalance}. Kontaktieren Sie Ihren Administrator.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Execution Form */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Webhook ausführen</CardTitle>
+            <CardDescription>
+              {webhook.input_type === 'TEXT' 
+                ? 'Geben Sie den Text ein, der an den Webhook gesendet werden soll'
+                : 'Wählen Sie eine Datei aus, die an den Webhook gesendet werden soll'
+              }
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {webhook.input_type === 'TEXT' ? (
+              <div>
+                <Label htmlFor="text-input">Text eingeben</Label>
+                <Textarea
+                  id="text-input"
+                  value={textInput}
+                  onChange={(e) => setTextInput(e.target.value)}
+                  placeholder="Geben Sie hier Ihren Text ein..."
+                  rows={6}
+                  className="mt-2"
+                />
+              </div>
+            ) : (
+              <div>
+                <Label htmlFor="file-input">Datei auswählen</Label>
+                <div className="mt-2">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    id="file-input"
+                    onChange={handleFileSelect}
+                    className="hidden"
+                  />
+                  <Button
+                    variant="outline"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="w-full"
+                  >
+                    <Upload className="h-4 w-4 mr-2" />
+                    {selectedFile ? selectedFile.name : 'Datei auswählen'}
+                  </Button>
+                  {selectedFile && (
+                    <p className="text-sm text-muted-foreground mt-2">
+                      Größe: {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <Button 
+              onClick={executeWebhook} 
+              disabled={executing || !webhook.is_active || hasInsufficientTokens}
+              className="w-full"
+            >
+              {executing ? (
+                <>
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                  Wird ausgeführt...
+                </>
+              ) : (
+                <>
+                  <Play className="h-4 w-4 mr-2" />
+                  Webhook ausführen
+                </>
+              )}
+            </Button>
+
+            {hasInsufficientTokens && (
+              <p className="text-sm text-center text-destructive">
+                Nicht genügend Tokens für die Ausführung
+              </p>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Results */}
+        {result && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                {result.success ? (
+                  <>
+                    <div className="h-2 w-2 bg-green-500 rounded-full"></div>
+                    Erfolgreich ausgeführt
+                  </>
+                ) : (
+                  <>
+                    <div className="h-2 w-2 bg-red-500 rounded-full"></div>
+                    Ausführung fehlgeschlagen
+                  </>
+                )}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {result.success ? (
+                <div className="space-y-4">
+                  {result.downloadBlob ? (
+                    <div className="text-center py-8">
+                      <FileText className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                      <p className="text-lg font-medium mb-2">Datei empfangen</p>
+                      <p className="text-muted-foreground mb-4">
+                        Der Webhook hat eine Datei zurückgegeben
+                      </p>
+                      <Button onClick={downloadFile}>
+                        <Download className="h-4 w-4 mr-2" />
+                        Datei herunterladen ({result.fileName})
+                      </Button>
+                    </div>
+                  ) : (
+                    <div>
+                      <Label className="text-sm font-medium">Antwort:</Label>
+                      <div className="mt-2 p-4 bg-muted rounded-lg">
+                        <pre className="text-sm overflow-auto whitespace-pre-wrap">
+                          {result.response || 'Keine Antwort erhalten'}
+                        </pre>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div>
+                  <Label className="text-sm font-medium text-destructive">Fehler:</Label>
+                  <div className="mt-2 p-4 bg-destructive/10 border border-destructive/20 rounded-lg">
+                    <p className="text-sm text-destructive">
+                      {result.error}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+      </div>
+    </Layout>
+  );
+};
+
+export default ExecuteWebhook;
