@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Mail, Calendar, Shield, User } from "lucide-react";
+import { Plus, Mail, Calendar, Shield, User, Globe, Users as UsersIcon } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 interface UserProfile {
@@ -19,37 +19,62 @@ interface UserProfile {
   role: 'ADMIN' | 'CLIENT';
   created_at: string;
   user_id: string;
+  webhooks_count?: number;
+}
+
+interface Webhook {
+  id: string;
+  name: string;
+  is_active: boolean;
 }
 
 const Users = () => {
   const { user, isAdmin } = useAuth();
   const navigate = useNavigate();
   const [users, setUsers] = useState<UserProfile[]>([]);
+  const [webhooks, setWebhooks] = useState<Webhook[]>([]);
   const [loading, setLoading] = useState(true);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [isAssignDialogOpen, setIsAssignDialogOpen] = useState(false);
+  const [selectedUser, setSelectedUser] = useState<UserProfile | null>(null);
+  const [selectedWebhooks, setSelectedWebhooks] = useState<string[]>([]);
   const [newUserEmail, setNewUserEmail] = useState("");
+  const [newUserPassword, setNewUserPassword] = useState("");
   const [newUserRole, setNewUserRole] = useState<'ADMIN' | 'CLIENT'>('CLIENT');
   const [isCreating, setIsCreating] = useState(false);
+  const [isAssigning, setIsAssigning] = useState(false);
 
   useEffect(() => {
-    if (!isAdmin) {
-      navigate('/');
-      return;
-    }
     if (user) {
-      fetchUsers();
+      if (isAdmin) {
+        fetchUsers();
+        fetchWebhooks();
+      } else {
+        navigate('/');
+      }
     }
-  }, [user, isAdmin, navigate]);
+  }, [user, isAdmin]);
 
   const fetchUsers = async () => {
     try {
-      const { data, error } = await supabase
+      // Get all users with webhook count
+      const { data: usersData, error } = await supabase
         .from('profiles')
-        .select('*')
+        .select(`
+          *,
+          webhook_assignments(webhook_id)
+        `)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
-      setUsers(data || []);
+      
+      // Count webhooks for each user
+      const usersWithCounts = (usersData || []).map(user => ({
+        ...user,
+        webhooks_count: user.webhook_assignments?.length || 0
+      }));
+      
+      setUsers(usersWithCounts);
     } catch (error) {
       console.error('Error fetching users:', error);
       toast({
@@ -62,11 +87,30 @@ const Users = () => {
     }
   };
 
-  const createUser = async () => {
-    if (!newUserEmail.trim()) {
+  const fetchWebhooks = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('webhooks')
+        .select('id, name, is_active')
+        .order('name');
+
+      if (error) throw error;
+      setWebhooks(data || []);
+    } catch (error) {
+      console.error('Error fetching webhooks:', error);
       toast({
-        title: "E-Mail erforderlich",
-        description: "Bitte geben Sie eine E-Mail-Adresse ein.",
+        title: "Fehler beim Laden der Webhooks",
+        description: "Die Webhooks konnten nicht geladen werden.",
+        variant: "destructive"
+      });
+    }
+  };
+
+  const createUser = async () => {
+    if (!newUserEmail.trim() || !newUserPassword.trim()) {
+      toast({
+        title: "Felder erforderlich",
+        description: "Bitte geben Sie E-Mail und Passwort ein.",
         variant: "destructive"
       });
       return;
@@ -77,7 +121,7 @@ const Users = () => {
       // Create user in Supabase Auth
       const { data: authData, error: authError } = await supabase.auth.admin.createUser({
         email: newUserEmail,
-        password: Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-8), // Generate random password
+        password: newUserPassword,
         email_confirm: true
       });
 
@@ -94,15 +138,27 @@ const Users = () => {
 
       if (profileError) throw profileError;
 
+      // Create client record
+      const { error: clientError } = await supabase
+        .from('clients')
+        .insert({
+          user_id: authData.user.id,
+          name: newUserEmail.split('@')[0],
+          tokens_balance: 100
+        });
+
+      if (clientError) throw clientError;
+
       toast({
         title: "Benutzer erstellt",
         description: `Benutzer ${newUserEmail} wurde erfolgreich erstellt.`
       });
 
       setNewUserEmail("");
+      setNewUserPassword("");
       setNewUserRole('CLIENT');
       setIsCreateDialogOpen(false);
-      fetchUsers();
+      await fetchUsers();
     } catch (error: any) {
       console.error('Error creating user:', error);
       toast({
@@ -115,8 +171,102 @@ const Users = () => {
     }
   };
 
+  const openAssignDialog = async (user: UserProfile) => {
+    setSelectedUser(user);
+    setIsAssignDialogOpen(true);
+    
+    // Get current assignments for this user
+    try {
+      const { data: assignments } = await supabase
+        .from('webhook_assignments')
+        .select('webhook_id')
+        .eq('user_id', user.user_id)
+        .eq('is_active', true);
+      
+      setSelectedWebhooks(assignments?.map(a => a.webhook_id) || []);
+    } catch (error) {
+      console.error('Error fetching user assignments:', error);
+    }
+  };
+
+  const saveWebhookAssignments = async () => {
+    if (!selectedUser) return;
+    
+    setIsAssigning(true);
+    try {
+      // First, deactivate all current assignments
+      await supabase
+        .from('webhook_assignments')
+        .update({ is_active: false })
+        .eq('user_id', selectedUser.user_id);
+      
+      // Then create new assignments
+      if (selectedWebhooks.length > 0) {
+        const assignments = selectedWebhooks.map(webhookId => ({
+          webhook_id: webhookId,
+          user_id: selectedUser.user_id,
+          assigned_by: user!.id,
+          is_active: true
+        }));
+        
+        const { error } = await supabase
+          .from('webhook_assignments')
+          .upsert(assignments, { 
+            onConflict: 'webhook_id,user_id',
+            ignoreDuplicates: false 
+          });
+        
+        if (error) throw error;
+      }
+      
+      toast({
+        title: "Zuweisungen aktualisiert",
+        description: `Webhook-Zuweisungen für ${selectedUser.email} wurden aktualisiert.`
+      });
+      
+      setIsAssignDialogOpen(false);
+      setSelectedUser(null);
+      setSelectedWebhooks([]);
+      await fetchUsers();
+    } catch (error: any) {
+      toast({
+        title: "Fehler beim Speichern",
+        description: error.message,
+        variant: "destructive"
+      });
+    } finally {
+      setIsAssigning(false);
+    }
+  };
+
+  const toggleWebhookSelection = (webhookId: string) => {
+    setSelectedWebhooks(prev => 
+      prev.includes(webhookId)
+        ? prev.filter(id => id !== webhookId)
+        : [...prev, webhookId]
+    );
+  };
+
   if (!isAdmin) {
-    return null;
+    return (
+      <Layout>
+        <div className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Zugriff verweigert</CardTitle>
+              <CardDescription>
+                Nur Administratoren können Benutzer verwalten.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button onClick={() => navigate('/')}>
+                Zurück zum Dashboard
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </Layout>
+    );
   }
 
   return (
@@ -155,6 +305,16 @@ const Users = () => {
                   />
                 </div>
                 <div>
+                  <Label htmlFor="password">Passwort</Label>
+                  <Input
+                    id="password"
+                    type="password"
+                    value={newUserPassword}
+                    onChange={(e) => setNewUserPassword(e.target.value)}
+                    placeholder="Sicheres Passwort"
+                  />
+                </div>
+                <div>
                   <Label htmlFor="role">Rolle</Label>
                   <Select value={newUserRole} onValueChange={(value: 'ADMIN' | 'CLIENT') => setNewUserRole(value)}>
                     <SelectTrigger>
@@ -173,6 +333,62 @@ const Users = () => {
                 </Button>
                 <Button onClick={createUser} disabled={isCreating}>
                   {isCreating ? "Erstelle..." : "Benutzer erstellen"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+          
+          {/* Webhook Assignment Dialog */}
+          <Dialog open={isAssignDialogOpen} onOpenChange={setIsAssignDialogOpen}>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>Webhooks zuweisen</DialogTitle>
+                <DialogDescription>
+                  Wählen Sie Webhooks für {selectedUser?.email} aus
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4 max-h-96 overflow-y-auto">
+                {webhooks.length === 0 ? (
+                  <p className="text-center py-4 text-muted-foreground">
+                    Keine Webhooks verfügbar
+                  </p>
+                ) : (
+                  webhooks.map((webhook) => (
+                    <div key={webhook.id} className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        id={`webhook-${webhook.id}`}
+                        checked={selectedWebhooks.includes(webhook.id)}
+                        onChange={() => toggleWebhookSelection(webhook.id)}
+                        className="rounded border-gray-300"
+                      />
+                      <Label 
+                        htmlFor={`webhook-${webhook.id}`}
+                        className="flex-1 cursor-pointer"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span>{webhook.name}</span>
+                          <Badge variant={webhook.is_active ? "default" : "secondary"}>
+                            {webhook.is_active ? "Aktiv" : "Inaktiv"}
+                          </Badge>
+                        </div>
+                      </Label>
+                    </div>
+                  ))
+                )}
+              </div>
+              <DialogFooter>
+                <Button 
+                  variant="outline" 
+                  onClick={() => setIsAssignDialogOpen(false)}
+                >
+                  Abbrechen
+                </Button>
+                <Button 
+                  onClick={saveWebhookAssignments} 
+                  disabled={isAssigning}
+                >
+                  {isAssigning ? "Speichere..." : "Speichern"}
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -234,11 +450,20 @@ const Users = () => {
                     <div className="flex gap-2 pt-2">
                       <Button 
                         size="sm" 
-                        variant="outline"
-                        onClick={() => navigate(`/users/${userProfile.user_id}/webhooks`)}
+                        onClick={() => openAssignDialog(userProfile)}
                       >
-                        Webhooks verwalten
+                        <Globe className="h-4 w-4 mr-2" />
+                        Webhooks ({userProfile.webhooks_count || 0})
                       </Button>
+                      {userProfile.role === 'CLIENT' && (
+                        <Button 
+                          size="sm" 
+                          variant="outline"
+                          onClick={() => navigate(`/execute-user/${userProfile.user_id}`)}
+                        >
+                          <UsersIcon className="h-4 w-4" />
+                        </Button>
+                      )}
                     </div>
                   </div>
                 </CardContent>
