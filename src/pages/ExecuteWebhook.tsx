@@ -1,72 +1,82 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
+import { useParams, useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "@/hooks/use-toast";
 import { Layout } from "@/components/Layout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import { Eye, RefreshCw, Download } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { ArrowLeft, Play, Download, FileText, Upload, Coins, Globe, History } from "lucide-react";
 
-interface Execution {
+interface Webhook {
   id: string;
-  webhook_id: string;
+  name: string;
+  description: string | null;
+  url: string;
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  headers: any;
+  input_type: 'TEXT' | 'FILE';
+  output_type: 'TEXT' | 'FILE';
+  is_active: boolean;
+  tokens_cost: number;
+  created_at: string;
   client_id: string;
-  status: 'SUCCESS' | 'ERROR' | 'TIMEOUT';
-  requested_at: string;
-  duration_ms: number | null;
-  tokens_used: number;
-  request_type: 'TEXT' | 'FILE';
-  status_code: number | null;
-  response: string | null;
-  error: string | null;
-  payload: string | null;
-  webhooks: {
-    name: string;
-  };
 }
 
-const History = () => {
+const ExecuteWebhook = () => {
+  const { webhookId } = useParams<{ webhookId: string }>();
   const { user, isAdmin } = useAuth();
-  const [executions, setExecutions] = useState<Execution[]>([]);
+  const navigate = useNavigate();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  const [webhook, setWebhook] = useState<Webhook | null>(null);
   const [loading, setLoading] = useState(true);
-  const [selectedExecution, setSelectedExecution] = useState<Execution | null>(null);
-  const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
+  const [executing, setExecuting] = useState(false);
+  const [textInput, setTextInput] = useState('');
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [result, setResult] = useState<{
+    success: boolean;
+    response?: string;
+    error?: string;
+    downloadBlob?: Blob;
+    fileName?: string;
+  } | null>(null);
+  const [tokensBalance, setTokensBalance] = useState<number>(0);
 
   useEffect(() => {
-    if (user) {
-      fetchExecutions();
+    if (user && webhookId) {
+      fetchWebhook();
+      if (!isAdmin) {
+        fetchTokenBalance();
+      }
     }
-  }, [user]);
+  }, [user, webhookId, isAdmin]);
 
-  const fetchExecutions = async () => {
-    if (!user) return;
+  const fetchWebhook = async () => {
+    if (!user || !webhookId) return;
 
     setLoading(true);
     try {
       if (isAdmin) {
-        // Admin can see all executions
-        const { data: executionsData, error } = await supabase
-          .from('executions')
-          .select(`
-            *,
-            webhooks (
-              name
-            )
-          `)
-          .order('requested_at', { ascending: false })
-          .limit(50);
+        // Admin can access any webhook
+        const { data: webhookData, error } = await supabase
+          .from('webhooks')
+          .select('*')
+          .eq('id', webhookId)
+          .single();
 
         if (error) {
-          console.error('Admin executions error:', error);
+          console.error('Admin webhook error:', error);
           throw error;
         }
 
-        setExecutions(executionsData || []);
+        setWebhook(webhookData);
       } else {
-        // Get client data first for regular users
+        // Get client data first for regular users  
         const { data: clientData, error: clientError } = await supabase
           .from('clients')
           .select('id')
@@ -80,36 +90,30 @@ const History = () => {
 
         if (!clientData) {
           console.log('No client data found for user:', user.id);
-          setExecutions([]);
+          setWebhook(null);
           return;
         }
 
-        // Get executions with webhook names for this client
-        const { data: executionsData, error: executionsError } = await supabase
-          .from('executions')
-          .select(`
-            *,
-            webhooks (
-              name
-            )
-          `)
+        // Get webhook for this client
+        const { data: webhookData, error: webhookError } = await supabase
+          .from('webhooks')
+          .select('*')
+          .eq('id', webhookId)
           .eq('client_id', clientData.id)
-          .order('requested_at', { ascending: false })
-          .limit(50);
+          .single();
 
-        if (executionsError) {
-          console.error('Client executions error:', executionsError);
-          throw executionsError;
+        if (webhookError) {
+          console.error('Client webhook error:', webhookError);
+          throw webhookError;
         }
 
-        console.log('Found executions for client:', executionsData?.length || 0);
-        setExecutions(executionsData || []);
+        setWebhook(webhookData);
       }
     } catch (error) {
-      console.error('Error fetching executions:', error);
+      console.error('Error fetching webhook:', error);
       toast({
-        title: "Fehler beim Laden der Historie",
-        description: (error && typeof error.message === 'string') ? error.message : "Die Ausführungshistorie konnte nicht geladen werden.",
+        title: "Fehler beim Laden des Webhooks",
+        description: (error && typeof error.message === 'string') ? error.message : "Der Webhook konnte nicht geladen werden.",
         variant: "destructive",
       });
     } finally {
@@ -117,88 +121,270 @@ const History = () => {
     }
   };
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'SUCCESS':
-        return 'default';
-      case 'ERROR':
-        return 'destructive';
-      case 'TIMEOUT':
-        return 'secondary';
-      default:
-        return 'outline';
-    }
-  };
+  const fetchTokenBalance = async () => {
+    if (!user) return;
 
-  const getStatusText = (status: string) => {
-    switch (status) {
-      case 'SUCCESS':
-        return 'Erfolgreich';
-      case 'ERROR':
-        return 'Fehler';
-      case 'TIMEOUT':
-        return 'Timeout';
-      default:
-        return status;
-    }
-  };
-
-  const showExecutionDetails = (execution: Execution) => {
-    setSelectedExecution(execution);
-    setDetailsDialogOpen(true);
-  };
-
-  const downloadBinaryResponse = (execution: Execution) => {
-    if (!execution.response) return;
-    
     try {
-      // Try to parse the response to get the actual binary data
-      let binaryData = execution.response;
+      const { data: clientData } = await supabase
+        .from('clients')
+        .select('tokens_balance')
+        .eq('user_id', user.id)
+        .single();
       
-      // If it's JSON wrapped, try to extract
-      try {
-        const parsed = JSON.parse(execution.response);
-        if (typeof parsed === 'string') {
-          binaryData = parsed;
+      if (clientData) {
+        setTokensBalance(clientData.tokens_balance);
+      }
+    } catch (error) {
+      console.error('Error fetching token balance:', error);
+    }
+  };
+
+  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      setSelectedFile(file);
+    }
+  };
+
+  const executeWebhook = async () => {
+    if (!webhook || !user) return;
+
+    // Check token balance for clients
+    if (!isAdmin && tokensBalance < webhook.tokens_cost) {
+      toast({
+        title: "Nicht genügend Tokens",
+        description: `Sie benötigen ${webhook.tokens_cost} Token${webhook.tokens_cost !== 1 ? 's' : ''}, haben aber nur ${tokensBalance}.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Validate input
+    if (webhook.input_type === 'TEXT' && !textInput.trim()) {
+      toast({
+        title: "Text erforderlich",
+        description: "Bitte geben Sie einen Text ein.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (webhook.input_type === 'FILE' && !selectedFile) {
+      toast({
+        title: "Datei erforderlich",
+        description: "Bitte wählen Sie eine Datei aus.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setExecuting(true);
+    setResult(null);
+
+    try {
+      // Get client data for non-admin users
+      let clientId = null;
+      if (!isAdmin) {
+        const { data: clientData } = await supabase
+          .from('clients')
+          .select('id')
+          .eq('user_id', user.id)
+          .single();
+        clientId = clientData?.id;
+      }
+
+      // Prepare the request
+      const formData = new FormData();
+      let payload: any = {};
+
+      if (webhook.input_type === 'TEXT') {
+        formData.append('text', textInput);
+        payload = { text: textInput };
+      } else if (webhook.input_type === 'FILE' && selectedFile) {
+        formData.append('file', selectedFile);
+        payload = { fileName: selectedFile.name, fileSize: selectedFile.size };
+      }
+
+      // Add headers
+      const headers: Record<string, string> = {};
+      if (webhook.headers && typeof webhook.headers === 'object') {
+        Object.assign(headers, webhook.headers);
+      }
+
+      // Execute the webhook
+      const startTime = Date.now();
+      let response: Response;
+      
+      if (webhook.method === 'GET') {
+        const url = new URL(webhook.url);
+        if (webhook.input_type === 'TEXT' && textInput) {
+          url.searchParams.append('text', textInput);
         }
-      } catch {
-        // Use response as is
+        response = await fetch(url.toString(), {
+          method: 'GET',
+          headers
+        });
+      } else {
+        response = await fetch(webhook.url, {
+          method: webhook.method,
+          headers,
+          body: formData
+        });
       }
-      
-      // Convert the binary string to a Blob
-      const bytes = new Uint8Array(binaryData.length);
-      for (let i = 0; i < binaryData.length; i++) {
-        bytes[i] = binaryData.charCodeAt(i);
-      }
-      
-      const blob = new Blob([bytes], { type: 'application/octet-stream' });
-      const url = URL.createObjectURL(blob);
-      
-      // Get filename from payload if available
-      let filename = 'download';
-      if (execution.payload) {
-        try {
-          const payload = JSON.parse(execution.payload);
-          if (payload.fileName) {
-            filename = payload.fileName;
+
+      const endTime = Date.now();
+      const duration = endTime - startTime;
+
+      let responseData: string | null = null;
+      let downloadBlob: Blob | null = null;
+      let fileName = 'download';
+
+      if (response.ok) {
+        if (webhook.output_type === 'FILE') {
+          // Handle binary response
+          downloadBlob = await response.blob();
+          
+          // Try to get filename from headers
+          const contentDisposition = response.headers.get('content-disposition');
+          if (contentDisposition) {
+            const fileNameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+            if (fileNameMatch) {
+              fileName = fileNameMatch[1].replace(/['"]/g, '');
+            }
           }
-        } catch {
-          // Use default filename
+          
+          // Use original filename if available
+          if (selectedFile) {
+            fileName = selectedFile.name;
+          }
+        } else {
+          // Handle text response
+          responseData = await response.text();
+        }
+
+        // Record successful execution
+        if (!isAdmin && clientId) {
+          try {
+            const { error: executionError } = await supabase
+              .from('executions')
+              .insert({
+                webhook_id: webhook.id,
+                client_id: clientId,
+                status: 'SUCCESS',
+                duration_ms: duration,
+                tokens_used: webhook.tokens_cost,
+                request_type: webhook.input_type,
+                status_code: response.status,
+                response: webhook.output_type === 'FILE' ? null : responseData,
+                payload: JSON.stringify(payload)
+              });
+
+            if (executionError) {
+              console.error('Error recording execution:', executionError);
+            }
+
+            // Deduct tokens on successful execution
+            const { error: tokenError } = await supabase
+              .from('clients')
+              .update({ 
+                tokens_balance: tokensBalance - webhook.tokens_cost 
+              })
+              .eq('id', clientId);
+
+            if (tokenError) {
+              console.error('Error deducting tokens:', tokenError);
+            } else {
+              setTokensBalance(prev => prev - webhook.tokens_cost);
+            }
+          } catch (recordError) {
+            console.error('Error recording execution:', recordError);
+          }
+        }
+
+        setResult({
+          success: true,
+          response: responseData,
+          downloadBlob: downloadBlob || undefined,
+          fileName
+        });
+
+        toast({
+          title: "Webhook erfolgreich ausgeführt",
+          description: !isAdmin ? `${webhook.tokens_cost} Token${webhook.tokens_cost !== 1 ? 's' : ''} verwendet` : "Ausführung erfolgreich",
+        });
+      } else {
+        const errorText = await response.text();
+        throw new Error(`HTTP ${response.status}: ${errorText}`);
+      }
+    } catch (error) {
+      console.error('Webhook execution error:', error);
+      
+      const errorMessage = (error && typeof error.message === 'string') ? error.message : "Unbekannter Fehler";
+      
+      // Record failed execution (no token deduction)
+      if (!isAdmin) {
+        try {
+          const { data: clientData } = await supabase
+            .from('clients')
+            .select('id')
+            .eq('user_id', user.id)
+            .single();
+
+          if (clientData) {
+            const { error: executionError } = await supabase
+              .from('executions')
+              .insert({
+                webhook_id: webhook.id,
+                client_id: clientData.id,
+                status: 'ERROR',
+                tokens_used: 0, // No tokens used on failure
+                request_type: webhook.input_type,
+                error: errorMessage.length > 1000 ? errorMessage.substring(0, 1000) + '...' : errorMessage,
+                payload: JSON.stringify(payload)
+              });
+
+            if (executionError) {
+              console.error('Error recording failed execution:', executionError);
+            }
+          }
+        } catch (recordError) {
+          console.error('Error recording failed execution:', recordError);
         }
       }
-      
+
+      setResult({
+        success: false,
+        error: errorMessage
+      });
+
+      toast({
+        title: "Webhook-Ausführung fehlgeschlagen",
+        description: errorMessage,
+        variant: "destructive",
+      });
+    } finally {
+      setExecuting(false);
+    }
+  };
+
+  const downloadFile = () => {
+    if (!result?.downloadBlob) return;
+
+    try {
+      const url = URL.createObjectURL(result.downloadBlob);
+
       // Create download link
       const a = document.createElement('a');
       a.href = url;
-      a.download = filename;
+      a.download = result.fileName || 'download';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      
+
       toast({
         title: "Download gestartet",
-        description: `Datei ${filename} wird heruntergeladen.`,
+        description: `Datei ${result.fileName || 'download'} wird heruntergeladen.`,
       });
     } catch (error) {
       console.error('Download error:', error);
@@ -209,227 +395,114 @@ const History = () => {
       });
     }
   };
-  const formatResponse = (response: string | null) => {
-    if (!response) return 'Keine Antwort';
-    
-    try {
-      // Try to parse as JSON first
-      const parsed = JSON.parse(response);
-      return JSON.stringify(parsed, null, 2);
-    } catch {
-      // If not JSON, check if it's binary data
-      if (response.includes('\\u0000') || response.includes('��') || /[\x00-\x08\x0E-\x1F\x7F-\x9F]/.test(response)) {
-        return '[Binäre Datei empfangen - Inhalt kann nicht angezeigt werden]';
-      }
-      return response;
-    }
-  };
 
-  const isResponseBinary = (response: string | null) => {
-    if (!response) return false;
-    return response.includes('\\u0000') || response.includes('��') || /[\x00-\x08\x0E-\x1F\x7F-\x9F]/.test(response);
+  const hasInsufficientTokens = !isAdmin && webhook && tokensBalance < webhook.tokens_cost;
+
+  if (loading) {
+    return (
+      <Layout>
+        <div className="flex items-center justify-center h-96">
+          <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-primary"></div>
+        </div>
+      </Layout>
+    );
+  }
+
+  if (!webhook) {
+    return (
+      <Layout>
+        <div className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Webhook nicht gefunden</CardTitle>
+              <CardDescription>
+                Der angeforderte Webhook konnte nicht gefunden werden oder Sie haben keinen Zugriff darauf.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button onClick={() => navigate('/webhooks')}>
+                <ArrowLeft className="mr-2 h-4 w-4" />
+                Zurück zu Webhooks
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </Layout>
+    );
   };
 
   return (
     <Layout>
       <div className="space-y-6">
         <div className="flex items-center justify-between">
-          <div>
-          <h1 className="text-3xl font-bold tracking-tight">Ausführungshistorie</h1>
-          <p className="text-muted-foreground">Übersicht über alle Webhook-Ausführungen</p>
+          <div className="flex items-center gap-4">
+            <Button variant="outline" size="sm" onClick={() => navigate('/webhooks')}>
+              <ArrowLeft className="h-4 w-4 mr-2" />
+              Zurück zu Webhooks
+            </Button>
+            <div>
+              <h1 className="text-3xl font-bold tracking-tight">Webhook ausführen</h1>
+              <p className="text-muted-foreground">{webhook.name}</p>
+            </div>
           </div>
-          <Button onClick={fetchExecutions} disabled={loading}>
-            <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
-            Aktualisieren
+          <Button variant="outline" onClick={() => navigate('/history')}>
+            <History className="h-4 w-4 mr-2" />
+            Historie anzeigen
           </Button>
         </div>
 
-        {loading ? (
-          <div className="flex items-center justify-center h-96">
-            <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-primary"></div>
-          </div>
-        ) : executions.length === 0 ? (
+        {/* Webhook Details */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Globe className="h-5 w-5 text-blue-500" />
+                {webhook.name}
+              </CardTitle>
+              <Badge variant={webhook.is_active ? "default" : "secondary"}>
+                {webhook.is_active ? 'Aktiv' : 'Inaktiv'}
+              </Badge>
+            </div>
+            {webhook.description && (
+              <CardDescription>{webhook.description}</CardDescription>
+            )}
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
+                <Label className="text-sm font-medium">HTTP Methode</Label>
+                <Badge variant="outline" className="mt-1">{webhook.method}</Badge>
+              </div>
+              <div>
+                <Label className="text-sm font-medium">Input Typ</Label>
+                <Badge variant="outline" className="mt-1">{webhook.input_type}</Badge>
+              </div>
+              <div>
+                <Label className="text-sm font-medium">Output Typ</Label>
+                <Badge variant="outline" className="mt-1">{webhook.output_type}</Badge>
+              </div>
+              <div>
+                <Label className="text-sm font-medium">Token-Kosten</Label>
+                <div className="flex items-center gap-1 mt-1">
+                  <Coins className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm">{webhook.tokens_cost}</span>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Token Balance for Clients */}
+        {!isAdmin && (
           <Card>
             <CardHeader>
-              <CardTitle>Keine Ausführungen</CardTitle>
+              <CardTitle className="flex items-center gap-2">
+                <Coins className="h-5 w-5 text-green-500" />
+                Token-Guthaben
+              </CardTitle>
               <CardDescription>
-                Es wurden noch keine Webhooks ausgeführt.
+                Ihr aktuelles Token-Guthaben
               </CardDescription>
             </CardHeader>
-          </Card>
-        ) : (
-          <div className="space-y-4">
-            {executions.map((execution) => (
-              <Card key={execution.id}>
-                <CardContent className="p-6">
-                  <div className="flex items-center justify-between">
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-3">
-                        <h3 className="font-semibold">{execution.webhooks.name}</h3>
-                        <Badge variant={getStatusColor(execution.status) as any}>
-                          {getStatusText(execution.status)}
-                        </Badge>
-                        {execution.status_code && (
-                          <Badge variant="outline">
-                            HTTP {execution.status_code}
-                          </Badge>
-                        )}
-                        <Badge variant="outline">
-                          {execution.request_type}
-                        </Badge>
-                      </div>
-                      
-                      <div className="flex items-center gap-4 text-sm text-muted-foreground">
-                        <span>
-                          {new Date(execution.requested_at).toLocaleString('de-DE')}
-                        </span>
-                        {execution.duration_ms && (
-                          <span>{execution.duration_ms}ms</span>
-                        )}
-                        <span>{execution.tokens_used} Token verwendet</span>
-                      </div>
-                    </div>
-                    
-                    <div className="flex items-center gap-2">
-                      <Button 
-                        variant="outline" 
-                        size="sm"
-                        onClick={() => showExecutionDetails(execution)}
-                      >
-                        <Eye className="h-4 w-4 mr-2" />
-                        Details
-                      </Button>
-                      {execution.status === 'SUCCESS' && isResponseBinary(execution.response) && (
-                        <Button 
-                          variant="outline" 
-                          size="sm"
-                          onClick={() => downloadBinaryResponse(execution)}
-                        >
-                          <Download className="h-4 w-4 mr-2" />
-                          Download
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                  
-                  {execution.error && (
-                    <div className="mt-4 p-3 bg-destructive/10 border border-destructive/20 rounded-lg">
-                      <p className="text-sm text-destructive font-medium">Fehler:</p>
-                      <p className="text-sm text-destructive/80 mt-1">
-                        {typeof execution.error === 'string' 
-                          ? execution.error 
-                          : JSON.stringify(execution.error)
-                        }
-                      </p>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        )}
-
-        {/* Execution Details Dialog */}
-        <Dialog open={detailsDialogOpen} onOpenChange={setDetailsDialogOpen}>
-          <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>Ausführungsdetails</DialogTitle>
-              <DialogDescription>
-                Details für Webhook: {selectedExecution?.webhooks?.name}
-              </DialogDescription>
-            </DialogHeader>
-            
-            {selectedExecution && (
-              <div className="space-y-6">
-                {/* Basic Info */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label className="text-sm font-medium">Status</Label>
-                    <div className="mt-1">
-                      <Badge variant={getStatusColor(selectedExecution.status) as any}>
-                        {getStatusText(selectedExecution.status)}
-                      </Badge>
-                    </div>
-                  </div>
-                  <div>
-                    <Label className="text-sm font-medium">Ausführungszeit</Label>
-                    <p className="mt-1 text-sm">{selectedExecution.duration_ms}ms</p>
-                  </div>
-                  <div>
-                    <Label className="text-sm font-medium">Token verwendet</Label>
-                    <p className="mt-1 text-sm">{selectedExecution.tokens_used}</p>
-                  </div>
-                  <div>
-                    <Label className="text-sm font-medium">Zeitpunkt</Label>
-                    <p className="mt-1 text-sm">
-                      {new Date(selectedExecution.requested_at).toLocaleString('de-DE')}
-                    </p>
-                  </div>
-                </div>
-
-                {/* Request Details */}
-                <div>
-                  <Label className="text-sm font-medium">Anfrage</Label>
-                  <div className="mt-2 p-3 bg-muted rounded-lg">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Badge variant="outline">{selectedExecution.request_type}</Badge>
-                      {selectedExecution.status_code && (
-                        <Badge variant="outline">HTTP {selectedExecution.status_code}</Badge>
-                      )}
-                    </div>
-                    {selectedExecution.payload && (
-                      <pre className="text-xs overflow-auto">
-                        {JSON.stringify(JSON.parse(selectedExecution.payload), null, 2)}
-                      </pre>
-                    )}
-                  </div>
-                </div>
-
-                {/* Response */}
-                <div>
-                  <Label className="text-sm font-medium">Antwort</Label>
-                  <div className="mt-2 p-3 bg-muted rounded-lg">
-                    {isResponseBinary(selectedExecution.response) ? (
-                      <div className="text-center py-4">
-                        <div className="text-muted-foreground mb-2">
-                          📁 Binäre Datei empfangen
-                        </div>
-                        <p className="text-xs text-muted-foreground">
-                          Der Webhook hat eine Datei zurückgegeben. Der Inhalt kann nicht als Text angezeigt werden.
-                        </p>
-                      </div>
-                    ) : (
-                      <pre className="text-xs overflow-auto max-h-96">
-                        {formatResponse(selectedExecution.response)}
-                      </pre>
-                    )}
-                  </div>
-                </div>
-
-                {/* Error Details */}
-                {selectedExecution.error && (
-                  <div>
-                    <Label className="text-sm font-medium text-destructive">Fehlerdetails</Label>
-                    <div className="mt-2 p-3 bg-destructive/10 border border-destructive/20 rounded-lg">
-                      <pre className="text-xs text-destructive overflow-auto">
-                        {selectedExecution.error}
-                      </pre>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-            
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setDetailsDialogOpen(false)}>
-                Schließen
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      </div>
-    </Layout>
-  );
-};
-
-export default History;
+            <CardContent>
+              <div className="flex
