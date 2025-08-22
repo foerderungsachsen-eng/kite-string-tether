@@ -75,7 +75,6 @@ const Users = () => {
   }
   const fetchUsers = async () => {
     try {
-      // Get all users first
       const { data: usersData, error } = await supabase
         .from('profiles')
         .select('*')
@@ -83,11 +82,29 @@ const Users = () => {
 
       if (error) throw error;
       
-      // For now, just set webhooks_count to 0 until we fix the table issue
-      const usersWithCounts = (usersData || []).map(user => ({
-        ...user,
-        webhooks_count: 0
-      }));
+      // Get webhook assignment counts for each user
+      const usersWithCounts = await Promise.all(
+        (usersData || []).map(async (user) => {
+          try {
+            const { data: assignments } = await supabase
+              .from('webhook_assignments')
+              .select('id')
+              .eq('user_id', user.user_id)
+              .eq('is_active', true);
+            
+            return {
+              ...user,
+              webhooks_count: assignments?.length || 0
+            };
+          } catch (error) {
+            console.error('Error fetching assignments for user:', user.user_id, error);
+            return {
+              ...user,
+              webhooks_count: 0
+            };
+          }
+        })
+      );
       
       setUsers(usersWithCounts);
     } catch (error) {
@@ -206,8 +223,19 @@ const Users = () => {
     setSelectedUser(user);
     setIsAssignDialogOpen(true);
     
-    // For now, set empty assignments until we fix the table issue
-    setSelectedWebhooks([]);
+    try {
+      // Get current assignments for this user
+      const { data: assignments } = await supabase
+        .from('webhook_assignments')
+        .select('webhook_id')
+        .eq('user_id', user.user_id)
+        .eq('is_active', true);
+      
+      setSelectedWebhooks(assignments?.map(a => a.webhook_id) || []);
+    } catch (error) {
+      console.error('Error fetching user assignments:', error);
+      setSelectedWebhooks([]);
+    }
   };
 
   const saveWebhookAssignments = async () => {
@@ -215,15 +243,42 @@ const Users = () => {
     
     setIsAssigning(true);
     try {
+      // First, deactivate all current assignments for this user
+      await supabase
+        .from('webhook_assignments')
+        .update({ is_active: false })
+        .eq('user_id', selectedUser.user_id);
+      
+      // Then create new assignments for selected webhooks
+      if (selectedWebhooks.length > 0) {
+        const assignments = selectedWebhooks.map(webhookId => ({
+          webhook_id: webhookId,
+          user_id: selectedUser.user_id,
+          assigned_by: user?.id,
+          is_active: true
+        }));
+        
+        const { error } = await supabase
+          .from('webhook_assignments')
+          .upsert(assignments, {
+            onConflict: 'webhook_id,user_id'
+          });
+        
+        if (error) throw error;
+      }
+      
       toast({
-        title: "Wird bald implementiert",
-        description: "Webhook-Zuweisungen werden in einem zukünftigen Update verfügbar sein."
+        title: "Zuweisungen gespeichert",
+        description: `${selectedWebhooks.length} Webhooks wurden ${selectedUser.email} zugewiesen.`
       });
       
+      // Refresh users list to update counts
+      await fetchUsers();
       setIsAssignDialogOpen(false);
       setSelectedUser(null);
       setSelectedWebhooks([]);
     } catch (error: any) {
+      console.error('Error saving assignments:', error);
       toast({
         title: "Fehler beim Speichern",
         description: error.message,
