@@ -15,7 +15,7 @@ import { useNavigate } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 
 const NewWebhook = () => {
-  const { user } = useAuth();
+  const { user, isAdmin } = useAuth();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState({
@@ -29,6 +29,29 @@ const NewWebhook = () => {
     output_type: "TEXT"
   });
 
+  // Redirect non-admin users
+  if (!isAdmin) {
+    return (
+      <Layout>
+        <div className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Zugriff verweigert</CardTitle>
+              <CardDescription>
+                Nur Administratoren können neue Webhooks erstellen.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button onClick={() => navigate('/webhooks')}>
+                <ArrowLeft className="mr-2 h-4 w-4" />
+                Zurück zu Webhooks
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </Layout>
+    );
+  }
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
@@ -36,16 +59,6 @@ const NewWebhook = () => {
     setLoading(true);
     
     try {
-      // Get client data first
-      const { data: clientData } = await supabase
-        .from('clients')
-        .select('id')
-        .eq('user_id', user.id)
-        .single();
-
-      if (!clientData) {
-        throw new Error('Client data not found');
-      }
 
       // Validate JSON headers
       let parsedHeaders = {};
@@ -64,7 +77,6 @@ const NewWebhook = () => {
       const { error } = await supabase
         .from('webhooks')
         .insert({
-          client_id: clientData.id,
           name: formData.name,
           target_url: formData.target_url,
           method: formData.method as "GET" | "POST" | "PUT" | "PATCH" | "DELETE",

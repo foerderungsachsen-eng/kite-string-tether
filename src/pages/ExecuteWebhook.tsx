@@ -49,21 +49,11 @@ const ExecuteWebhook = () => {
     if (!user || !webhookId) return;
 
     try {
-      // Get client data first
-      const { data: clientData } = await supabase
-        .from('clients')
-        .select('id')
-        .eq('user_id', user.id)
-        .single();
-
-      if (!clientData) return;
-
-      // Get webhook
+      // Get webhook (will be filtered by RLS policies)
       const { data: webhookData } = await supabase
         .from('webhooks')
         .select('*')
         .eq('id', webhookId)
-        .eq('client_id', clientData.id)
         .single();
 
       if (webhookData) {
@@ -134,14 +124,6 @@ const ExecuteWebhook = () => {
     setExecutionError(null);
 
     try {
-      // Get client data
-      const { data: clientData } = await supabase
-        .from('clients')
-        .select('id')
-        .eq('user_id', user.id)
-        .single();
-
-      if (!clientData) throw new Error('Client data not found');
 
       let fileKey: string | null = null;
       let requestBody: any;
@@ -210,7 +192,6 @@ const ExecuteWebhook = () => {
       const { error: executionError } = await supabase
         .from('executions')
         .insert({
-          client_id: clientData.id,
           webhook_id: webhook.id,
           request_type: inputType,
           payload: JSON.stringify(payloadForDb),
@@ -227,13 +208,6 @@ const ExecuteWebhook = () => {
         console.error('Error recording execution:', executionError);
       }
 
-      // Update token balance
-      await supabase
-        .from('clients')
-        .update({ tokens_balance: tokensBalance - 1 })
-        .eq('id', clientData.id);
-
-      setTokensBalance(prev => prev - 1);
 
       if (response.ok) {
         setResponse(responseData);

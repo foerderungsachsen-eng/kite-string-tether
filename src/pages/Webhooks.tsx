@@ -6,7 +6,7 @@ import { Layout } from "@/components/Layout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Globe, Plus, Settings, Play } from "lucide-react";
+import { Globe, Plus, Settings, Play, Users } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 interface Webhook {
@@ -17,10 +17,11 @@ interface Webhook {
   is_active: boolean;
   description?: string;
   created_at: string;
+  assigned_users?: number;
 }
 
 const Webhooks = () => {
-  const { user } = useAuth();
+  const { user, isAdmin } = useAuth();
   const navigate = useNavigate();
   const [webhooks, setWebhooks] = useState<Webhook[]>([]);
   const [loading, setLoading] = useState(true);
@@ -35,21 +36,31 @@ const Webhooks = () => {
     if (!user) return;
 
     try {
-      // Get client data first
-      const { data: clientData } = await supabase
-        .from('clients')
-        .select('id')
-        .eq('user_id', user.id)
-        .single();
-
-      if (!clientData) return;
-
-      // Get webhooks
-      const { data: webhooksData } = await supabase
-        .from('webhooks')
-        .select('*')
-        .eq('client_id', clientData.id)
-        .order('created_at', { ascending: false });
+      let webhooksData;
+      
+      if (isAdmin) {
+        // Admins can see all webhooks with assignment count
+        const { data } = await supabase
+          .from('webhooks')
+          .select(`
+            *,
+            webhook_assignments!inner(count)
+          `)
+          .order('created_at', { ascending: false });
+        webhooksData = data;
+      } else {
+        // Regular users can only see assigned webhooks
+        const { data } = await supabase
+          .from('webhooks')
+          .select(`
+            *,
+            webhook_assignments!inner(user_id)
+          `)
+          .eq('webhook_assignments.user_id', user.id)
+          .eq('webhook_assignments.is_active', true)
+          .order('created_at', { ascending: false });
+        webhooksData = data;
+      }
 
       setWebhooks(webhooksData || []);
     } catch (error) {
@@ -63,18 +74,25 @@ const Webhooks = () => {
     navigate(`/execute/${webhookId}`);
   };
 
+  const manageAssignments = (webhookId: string) => {
+    navigate(`/webhooks/${webhookId}/assignments`);
+  };
   return (
     <Layout>
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold tracking-tight">Webhooks</h1>
-            <p className="text-muted-foreground">Verwalten Sie Ihre Webhook-Endpunkte</p>
+            <p className="text-muted-foreground">
+              {isAdmin ? "Verwalten Sie alle Webhook-Endpunkte" : "Ihre zugewiesenen Webhook-Endpunkte"}
+            </p>
           </div>
-          <Button onClick={() => navigate('/webhooks/new')}>
-            <Plus className="mr-2 h-4 w-4" />
-            Neuer Webhook
-          </Button>
+          {isAdmin && (
+            <Button onClick={() => navigate('/webhooks/new')}>
+              <Plus className="mr-2 h-4 w-4" />
+              Neuer Webhook
+            </Button>
+          )}
         </div>
 
         {loading ? (
@@ -84,17 +102,24 @@ const Webhooks = () => {
         ) : webhooks.length === 0 ? (
           <Card>
             <CardHeader>
-              <CardTitle>Noch keine Webhooks</CardTitle>
+              <CardTitle>
+                {isAdmin ? "Noch keine Webhooks" : "Keine zugewiesenen Webhooks"}
+              </CardTitle>
               <CardDescription>
-                Erstellen Sie Ihren ersten Webhook, um loszulegen.
+                {isAdmin 
+                  ? "Erstellen Sie Ihren ersten Webhook, um loszulegen."
+                  : "Sie haben noch keine Webhooks zugewiesen bekommen. Kontaktieren Sie Ihren Administrator."
+                }
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              <Button onClick={() => navigate('/webhooks/new')}>
-                <Plus className="mr-2 h-4 w-4" />
-                Ersten Webhook erstellen
-              </Button>
-            </CardContent>
+            {isAdmin && (
+              <CardContent>
+                <Button onClick={() => navigate('/webhooks/new')}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Ersten Webhook erstellen
+                </Button>
+              </CardContent>
+            )}
           </Card>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -103,9 +128,16 @@ const Webhooks = () => {
                 <CardHeader>
                   <div className="flex items-center justify-between">
                     <CardTitle className="text-lg">{webhook.name}</CardTitle>
-                    <Badge variant={webhook.is_active ? "default" : "secondary"}>
-                      {webhook.is_active ? "Aktiv" : "Inaktiv"}
-                    </Badge>
+                    <div className="flex gap-2">
+                      <Badge variant={webhook.is_active ? "default" : "secondary"}>
+                        {webhook.is_active ? "Aktiv" : "Inaktiv"}
+                      </Badge>
+                      {isAdmin && webhook.assigned_users !== undefined && (
+                        <Badge variant="outline">
+                          {webhook.assigned_users} Benutzer
+                        </Badge>
+                      )}
+                    </div>
                   </div>
                   <CardDescription className="line-clamp-2">
                     {webhook.description || "Keine Beschreibung verfügbar"}
@@ -125,23 +157,34 @@ const Webhooks = () => {
                       </span>
                     </div>
                     
-                    <div className="flex gap-2 pt-2">
+                    <div className="flex gap-2 pt-2 flex-wrap">
                       <Button 
                         size="sm" 
-                        className="flex-1"
+                        className={isAdmin ? "" : "flex-1"}
                         onClick={() => navigate(`/execute/${webhook.id}`)}
                         disabled={!webhook.is_active}
                       >
                         <Play className="mr-2 h-4 w-4" />
                         Ausführen
                       </Button>
-                      <Button 
-                        size="sm" 
-                        variant="outline"
-                        onClick={() => toast({ title: "Wird bald implementiert", description: "Webhook-Einstellungen kommen in einem zukünftigen Update" })}
-                      >
-                        <Settings className="h-4 w-4" />
-                      </Button>
+                      {isAdmin && (
+                        <>
+                          <Button 
+                            size="sm" 
+                            variant="outline"
+                            onClick={() => manageAssignments(webhook.id)}
+                          >
+                            <Users className="h-4 w-4" />
+                          </Button>
+                          <Button 
+                            size="sm" 
+                            variant="outline"
+                            onClick={() => toast({ title: "Wird bald implementiert", description: "Webhook-Einstellungen kommen in einem zukünftigen Update" })}
+                          >
+                            <Settings className="h-4 w-4" />
+                          </Button>
+                        </>
+                      )}
                     </div>
                   </div>
                 </CardContent>

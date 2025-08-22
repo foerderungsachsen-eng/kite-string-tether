@@ -25,23 +25,10 @@ export const Layout = ({ children }: LayoutProps) => {
 
   useEffect(() => {
     if (user) {
-      fetchTokenBalance();
+      // fetchTokenBalance(); // Removed token balance for now
     }
   }, [user]);
 
-  const fetchTokenBalance = async () => {
-    if (!user) return;
-    
-    const { data } = await supabase
-      .from('clients')
-      .select('tokens_balance')
-      .eq('user_id', user.id)
-      .single();
-    
-    if (data) {
-      setTokensBalance(data.tokens_balance);
-    }
-  };
 
   const handleSignOut = async () => {
     await signOut();
@@ -76,12 +63,7 @@ export const Layout = ({ children }: LayoutProps) => {
             </div>
             
             <div className="flex items-center gap-4">
-              <Card className="bg-muted/50">
-                <CardContent className="flex items-center gap-2 p-3">
-                  <Coins className="h-4 w-4 text-primary" />
-                  <span className="font-medium">{tokensBalance} Tokens</span>
-                </CardContent>
-              </Card>
+              {/* Token balance removed for now */}
               
               <Button variant="outline" size="sm" onClick={handleSignOut}>
                 <LogOut className="h-4 w-4 mr-2" />
