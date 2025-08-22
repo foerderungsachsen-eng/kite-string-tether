@@ -16,7 +16,7 @@ interface DashboardStats {
 }
 
 const Dashboard = () => {
-  const { user } = useAuth();
+  const { user, isAdmin } = useAuth();
   const navigate = useNavigate();
   const [stats, setStats] = useState<DashboardStats>({
     totalWebhooks: 0,
@@ -156,6 +156,7 @@ const Dashboard = () => {
             <Button 
               className="w-full justify-start" 
               onClick={() => navigate('/webhooks/new')}
+             style={{ display: isAdmin ? 'flex' : 'none' }}
             >
               <Globe className="mr-2 h-4 w-4" />
               Neuen Webhook erstellen

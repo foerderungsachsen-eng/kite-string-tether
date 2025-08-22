@@ -1,4 +1,5 @@
 import { NavLink, useLocation } from "react-router-dom";
+import { useAuth } from "@/hooks/useAuth";
 import {
   Sidebar,
   SidebarContent,
@@ -12,17 +13,19 @@ import {
 } from "@/components/ui/sidebar";
 import { Home, Globe, History, Settings, Users } from "lucide-react";
 
-const items = [
-  { title: "Dashboard", url: "/", icon: Home },
-  { title: "Webhooks", url: "/webhooks", icon: Globe },
-  { title: "Benutzer", url: "/users", icon: Users },
-  { title: "Historie", url: "/history", icon: History },
-  { title: "Einstellungen", url: "/settings", icon: Settings },
-];
 
 export function AppSidebar() {
+  const { isAdmin } = useAuth();
   const location = useLocation();
   const currentPath = location.pathname;
+
+  const items = [
+    { title: "Dashboard", url: "/", icon: Home },
+    { title: "Webhooks", url: "/webhooks", icon: Globe },
+    ...(isAdmin ? [{ title: "Benutzer", url: "/users", icon: Users }] : []),
+    { title: "Historie", url: "/history", icon: History },
+    { title: "Einstellungen", url: "/settings", icon: Settings },
+  ];
 
   const isActive = (path: string) => currentPath === path;
 
