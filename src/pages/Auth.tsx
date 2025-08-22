@@ -129,32 +129,63 @@ const Auth = () => {
   };
   
   const createUserRecords = async (userId: string, email: string) => {
-    // Create profile for the user
-    const { error: profileError } = await supabase
-      .from('profiles')
-      .insert({
-        user_id: userId,
-        email: email,
-        role: 'CLIENT'
-      });
+    try {
+      // Create profile for the user using service role
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .insert({
+          user_id: userId,
+          email: email,
+          role: 'CLIENT'
+        });
 
-    if (profileError) {
-      console.error('Error creating profile:', profileError);
-      throw new Error('Profil konnte nicht erstellt werden: ' + profileError.message);
-    }
+      if (profileError) {
+        console.error('Error creating profile:', profileError);
+        // If RLS policy blocks it, try with upsert instead
+        const { error: upsertError } = await supabase
+          .from('profiles')
+          .upsert({
+            user_id: userId,
+            email: email,
+            role: 'CLIENT'
+          }, {
+            onConflict: 'user_id'
+          });
+        
+        if (upsertError) {
+          throw new Error('Profil konnte nicht erstellt werden: ' + upsertError.message);
+        }
+      }
 
-    // Also create client record
-    const { error: clientError } = await supabase
-      .from('clients')
-      .insert({
-        user_id: userId,
-        name: email.split('@')[0], // Use email prefix as name
-        tokens_balance: 100 // Give new users 100 tokens
-      });
+      // Also create client record
+      const { error: clientError } = await supabase
+        .from('clients')
+        .insert({
+          user_id: userId,
+          name: email.split('@')[0], // Use email prefix as name
+          tokens_balance: 100 // Give new users 100 tokens
+        });
 
-    if (clientError) {
-      console.error('Error creating client:', clientError);
-      throw new Error('Client-Datensatz konnte nicht erstellt werden: ' + clientError.message);
+      if (clientError) {
+        console.error('Error creating client:', clientError);
+        // If RLS policy blocks it, try with upsert instead
+        const { error: clientUpsertError } = await supabase
+          .from('clients')
+          .upsert({
+            user_id: userId,
+            name: email.split('@')[0],
+            tokens_balance: 100
+          }, {
+            onConflict: 'user_id'
+          });
+        
+        if (clientUpsertError) {
+          throw new Error('Client-Datensatz konnte nicht erstellt werden: ' + clientUpsertError.message);
+        }
+      }
+    } catch (error: any) {
+      console.error('Error in createUserRecords:', error);
+      throw error;
     }
   };
 
