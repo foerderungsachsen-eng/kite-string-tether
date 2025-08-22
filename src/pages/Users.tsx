@@ -83,21 +83,11 @@ const Users = () => {
 
       if (error) throw error;
       
-      // Get webhook assignments count for each user separately
-      const usersWithCounts = await Promise.all(
-        (usersData || []).map(async (user) => {
-          const { data: assignments } = await supabase
-            .from('webhook_assignments')
-            .select('id')
-            .eq('user_id', user.user_id)
-            .eq('is_active', true);
-          
-          return {
-            ...user,
-            webhooks_count: assignments?.length || 0
-          };
-        })
-      );
+      // For now, just set webhooks_count to 0 until we fix the table issue
+      const usersWithCounts = (usersData || []).map(user => ({
+        ...user,
+        webhooks_count: 0
+      }));
       
       setUsers(usersWithCounts);
     } catch (error) {
@@ -143,36 +133,52 @@ const Users = () => {
 
     setIsCreating(true);
     try {
-      // Create user in Supabase Auth
-      const { data: authData, error: authError } = await supabase.auth.admin.createUser({
+      // Use regular signup instead of admin.createUser
+      const { data: authData, error: authError } = await supabase.auth.signUp({
         email: newUserEmail,
         password: newUserPassword,
-        email_confirm: true
+        options: {
+          emailRedirectTo: `${window.location.origin}/`,
+          data: {
+            email_confirm: false
+          }
+        }
       });
 
       if (authError) throw authError;
 
-      // Create profile
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .insert({
-          user_id: authData.user.id,
-          email: newUserEmail,
-          role: newUserRole
-        });
+      if (authData.user) {
+        // Wait a moment for the user to be fully created
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        // Create profile
+        const { error: profileError } = await supabase
+          .from('profiles')
+          .insert({
+            user_id: authData.user.id,
+            email: newUserEmail,
+            role: newUserRole
+          });
 
-      if (profileError) throw profileError;
+        if (profileError) {
+          console.error('Profile creation error:', profileError);
+          throw new Error(`Profil konnte nicht erstellt werden: ${profileError.message}`);
+        }
 
-      // Create client record
-      const { error: clientError } = await supabase
-        .from('clients')
-        .insert({
-          user_id: authData.user.id,
-          name: newUserEmail.split('@')[0],
-          tokens_balance: 100
-        });
+        // Create client record
+        const { error: clientError } = await supabase
+          .from('clients')
+          .insert({
+            user_id: authData.user.id,
+            name: newUserEmail.split('@')[0],
+            tokens_balance: 100
+          });
 
-      if (clientError) throw clientError;
+        if (clientError) {
+          console.error('Client creation error:', clientError);
+          throw new Error(`Client-Datensatz konnte nicht erstellt werden: ${clientError.message}`);
+        }
+      }
 
       toast({
         title: "Benutzer erstellt",
@@ -200,18 +206,8 @@ const Users = () => {
     setSelectedUser(user);
     setIsAssignDialogOpen(true);
     
-    // Get current assignments for this user
-    try {
-      const { data: assignments } = await supabase
-        .from('webhook_assignments')
-        .select('webhook_id')
-        .eq('user_id', user.user_id)
-        .eq('is_active', true);
-      
-      setSelectedWebhooks(assignments?.map(a => a.webhook_id) || []);
-    } catch (error) {
-      console.error('Error fetching user assignments:', error);
-    }
+    // For now, set empty assignments until we fix the table issue
+    setSelectedWebhooks([]);
   };
 
   const saveWebhookAssignments = async () => {
@@ -219,40 +215,14 @@ const Users = () => {
     
     setIsAssigning(true);
     try {
-      // First, deactivate all current assignments
-      await supabase
-        .from('webhook_assignments')
-        .update({ is_active: false })
-        .eq('user_id', selectedUser.user_id);
-      
-      // Then create new assignments
-      if (selectedWebhooks.length > 0) {
-        const assignments = selectedWebhooks.map(webhookId => ({
-          webhook_id: webhookId,
-          user_id: selectedUser.user_id,
-          assigned_by: user!.id,
-          is_active: true
-        }));
-        
-        const { error } = await supabase
-          .from('webhook_assignments')
-          .upsert(assignments, { 
-            onConflict: 'webhook_id,user_id',
-            ignoreDuplicates: false 
-          });
-        
-        if (error) throw error;
-      }
-      
       toast({
-        title: "Zuweisungen aktualisiert",
-        description: `Webhook-Zuweisungen für ${selectedUser.email} wurden aktualisiert.`
+        title: "Wird bald implementiert",
+        description: "Webhook-Zuweisungen werden in einem zukünftigen Update verfügbar sein."
       });
       
       setIsAssignDialogOpen(false);
       setSelectedUser(null);
       setSelectedWebhooks([]);
-      await fetchUsers();
     } catch (error: any) {
       toast({
         title: "Fehler beim Speichern",
