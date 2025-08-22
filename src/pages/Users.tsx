@@ -45,34 +45,59 @@ const Users = () => {
   const [isAssigning, setIsAssigning] = useState(false);
 
   useEffect(() => {
-    if (user) {
-      if (isAdmin) {
-        fetchUsers();
-        fetchWebhooks();
-      } else {
-        navigate('/');
-      }
+    if (user && isAdmin) {
+      fetchUsers();
+      fetchWebhooks();
     }
   }, [user, isAdmin]);
 
+  // Don't redirect non-admins, just show access denied message
+  if (!isAdmin && user) {
+    return (
+      <Layout>
+        <div className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Zugriff verweigert</CardTitle>
+              <CardDescription>
+                Nur Administratoren können Benutzer verwalten.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button onClick={() => navigate('/')}>
+                Zurück zum Dashboard
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </Layout>
+    );
+  }
   const fetchUsers = async () => {
     try {
-      // Get all users with webhook count
+      // Get all users first
       const { data: usersData, error } = await supabase
         .from('profiles')
-        .select(`
-          *,
-          webhook_assignments(webhook_id)
-        `)
+        .select('*')
         .order('created_at', { ascending: false });
 
       if (error) throw error;
       
-      // Count webhooks for each user
-      const usersWithCounts = (usersData || []).map(user => ({
-        ...user,
-        webhooks_count: user.webhook_assignments?.length || 0
-      }));
+      // Get webhook assignments count for each user separately
+      const usersWithCounts = await Promise.all(
+        (usersData || []).map(async (user) => {
+          const { data: assignments } = await supabase
+            .from('webhook_assignments')
+            .select('id')
+            .eq('user_id', user.user_id)
+            .eq('is_active', true);
+          
+          return {
+            ...user,
+            webhooks_count: assignments?.length || 0
+          };
+        })
+      );
       
       setUsers(usersWithCounts);
     } catch (error) {
@@ -247,23 +272,11 @@ const Users = () => {
     );
   };
 
-  if (!isAdmin) {
+  if (loading) {
     return (
       <Layout>
-        <div className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Zugriff verweigert</CardTitle>
-              <CardDescription>
-                Nur Administratoren können Benutzer verwalten.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Button onClick={() => navigate('/')}>
-                Zurück zum Dashboard
-              </Button>
-            </CardContent>
-          </Card>
+        <div className="flex items-center justify-center h-96">
+          <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-primary"></div>
         </div>
       </Layout>
     );
@@ -395,11 +408,7 @@ const Users = () => {
           </Dialog>
         </div>
 
-        {loading ? (
-          <div className="flex items-center justify-center h-96">
-            <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-primary"></div>
-          </div>
-        ) : users.length === 0 ? (
+        {users.length === 0 ? (
           <Card>
             <CardHeader>
               <CardTitle>Noch keine Benutzer</CardTitle>

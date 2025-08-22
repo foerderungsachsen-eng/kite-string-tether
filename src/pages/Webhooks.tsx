@@ -47,16 +47,37 @@ const Webhooks = () => {
           .order('created_at', { ascending: false });
         webhooksData = data;
       } else {
-        // Regular users can only see assigned webhooks
+        // Get client ID first
+        const { data: clientData } = await supabase
+          .from('clients')
+          .select('id')
+          .eq('user_id', user.id)
+          .single();
+
+        if (!clientData) {
+          setWebhooks([]);
+          return;
+        }
+
+        // Get assigned webhooks through webhook_assignments
+        const { data: assignments } = await supabase
+          .from('webhook_assignments')
+          .select('webhook_id')
+          .eq('user_id', user.id)
+          .eq('is_active', true);
+
+        if (!assignments || assignments.length === 0) {
+          setWebhooks([]);
+          return;
+        }
+
+        const webhookIds = assignments.map(a => a.webhook_id);
         const { data } = await supabase
           .from('webhooks')
-          .select(`
-            *,
-            webhook_assignments!inner(*)
-          `)
-          .eq('webhook_assignments.user_id', user.id)
-          .eq('webhook_assignments.is_active', true)
+          .select('*')
+          .in('id', webhookIds)
           .order('created_at', { ascending: false });
+          
         webhooksData = data;
       }
 
