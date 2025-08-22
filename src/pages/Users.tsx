@@ -398,21 +398,8 @@ const Users = () => {
 
     setIsUpdatingSettings(true);
     try {
-      // Update skip email verification
-      const { error: skipEmailError } = await supabase
-        .from('profiles')
-        .update({ skip_email_verification: skipEmailVerification })
-        .eq('user_id', selectedUser.user_id);
-
-      if (skipEmailError) {
-        console.error('Error updating skip email verification:', skipEmailError);
-        toast({
-          title: "Fehler beim Aktualisieren",
-          description: `Skip Email Verification konnte nicht aktualisiert werden: ${skipEmailError.message}`,
-          variant: "destructive"
-        });
-        return;
-      }
+      // Skip email verification update temporarily disabled until column is added
+      console.log('Skip email verification setting:', skipEmailVerification);
 
       // Update password if provided
       if (newPassword.trim()) {
@@ -429,8 +416,8 @@ const Users = () => {
       // This would need to be done via admin API or edge function
 
       toast({
-        title: "Einstellungen aktualisiert",
-        description: "Skip Email Verification wurde erfolgreich aktualisiert."
+        title: "Einstellungen gespeichert",
+        description: "Einstellungen wurden gespeichert (Skip Email Verification wird noch implementiert)."
       });
       
       await fetchUsers(); // Refresh user list
@@ -659,13 +646,14 @@ const Users = () => {
                     id="skip-email-verification"
                     checked={skipEmailVerification}
                     onCheckedChange={(checked) => setSkipEmailVerification(checked as boolean)}
+                    disabled={true}
                   />
                   <Label htmlFor="skip-email-verification" className="text-sm">
-                    Skip E-Mail Verification
+                    Skip E-Mail Verification (wird implementiert)
                   </Label>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Aktivieren Sie diese Option, damit sich der Benutzer ohne E-Mail-Bestätigung anmelden kann
+                  Diese Funktion wird derzeit implementiert und ist noch nicht verfügbar
                 </p>
               </div>
               <DialogFooter>
