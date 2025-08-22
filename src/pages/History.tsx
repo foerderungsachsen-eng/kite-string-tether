@@ -1,17 +1,19 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { toast } from "@/hooks/use-toast";
 import { Layout } from "@/components/Layout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import { Eye, RefreshCw } from "lucide-react";
+import { Eye, RefreshCw, Download } from "lucide-react";
 
 interface Execution {
   id: string;
   webhook_id: string;
+  client_id: string;
   status: 'SUCCESS' | 'ERROR' | 'TIMEOUT';
   requested_at: string;
   duration_ms: number | null;
@@ -20,6 +22,7 @@ interface Execution {
   status_code: number | null;
   response: string | null;
   error: string | null;
+  payload: string | null;
   webhooks: {
     name: string;
   };
@@ -41,10 +44,11 @@ const History = () => {
   const fetchExecutions = async () => {
     if (!user) return;
 
+    setLoading(true);
     try {
       if (isAdmin) {
         // Admin can see all executions
-        const { data: executionsData } = await supabase
+        const { data: executionsData, error } = await supabase
           .from('executions')
           .select(`
             *,
@@ -55,22 +59,33 @@ const History = () => {
           .order('requested_at', { ascending: false })
           .limit(50);
 
+        if (error) {
+          console.error('Admin executions error:', error);
+          throw error;
+        }
+
         setExecutions(executionsData || []);
       } else {
         // Get client data first for regular users
-        const { data: clientData } = await supabase
+        const { data: clientData, error: clientError } = await supabase
           .from('clients')
           .select('id')
           .eq('user_id', user.id)
           .single();
 
+        if (clientError) {
+          console.error('Client data error:', clientError);
+          throw clientError;
+        }
+
         if (!clientData) {
+          console.log('No client data found for user:', user.id);
           setExecutions([]);
           return;
         }
 
         // Get executions with webhook names for this client
-        const { data: executionsData } = await supabase
+        const { data: executionsData, error: executionsError } = await supabase
           .from('executions')
           .select(`
             *,
@@ -82,13 +97,19 @@ const History = () => {
           .order('requested_at', { ascending: false })
           .limit(50);
 
+        if (executionsError) {
+          console.error('Client executions error:', executionsError);
+          throw executionsError;
+        }
+
+        console.log('Found executions for client:', executionsData?.length || 0);
         setExecutions(executionsData || []);
       }
     } catch (error) {
       console.error('Error fetching executions:', error);
       toast({
         title: "Fehler beim Laden der Historie",
-        description: "Die Ausführungshistorie konnte nicht geladen werden.",
+        description: error?.message || "Die Ausführungshistorie konnte nicht geladen werden.",
         variant: "destructive",
       });
     } finally {
@@ -127,6 +148,67 @@ const History = () => {
     setDetailsDialogOpen(true);
   };
 
+  const downloadBinaryResponse = (execution: Execution) => {
+    if (!execution.response) return;
+    
+    try {
+      // Try to parse the response to get the actual binary data
+      let binaryData = execution.response;
+      
+      // If it's JSON wrapped, try to extract
+      try {
+        const parsed = JSON.parse(execution.response);
+        if (typeof parsed === 'string') {
+          binaryData = parsed;
+        }
+      } catch {
+        // Use response as is
+      }
+      
+      // Convert the binary string to a Blob
+      const bytes = new Uint8Array(binaryData.length);
+      for (let i = 0; i < binaryData.length; i++) {
+        bytes[i] = binaryData.charCodeAt(i);
+      }
+      
+      const blob = new Blob([bytes], { type: 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      
+      // Get filename from payload if available
+      let filename = 'download';
+      if (execution.payload) {
+        try {
+          const payload = JSON.parse(execution.payload);
+          if (payload.fileName) {
+            filename = payload.fileName;
+          }
+        } catch {
+          // Use default filename
+        }
+      }
+      
+      // Create download link
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      toast({
+        title: "Download gestartet",
+        description: `Datei ${filename} wird heruntergeladen.`,
+      });
+    } catch (error) {
+      console.error('Download error:', error);
+      toast({
+        title: "Download-Fehler",
+        description: "Die Datei konnte nicht heruntergeladen werden.",
+        variant: "destructive",
+      });
+    }
+  };
   const formatResponse = (response: string | null) => {
     if (!response) return 'Keine Antwort';
     
@@ -217,6 +299,16 @@ const History = () => {
                         <Eye className="h-4 w-4 mr-2" />
                         Details
                       </Button>
+                      {execution.status === 'SUCCESS' && isResponseBinary(execution.response) && (
+                        <Button 
+                          variant="outline" 
+                          size="sm"
+                          onClick={() => downloadBinaryResponse(execution)}
+                        >
+                          <Download className="h-4 w-4 mr-2" />
+                          Download
+                        </Button>
+                      )}
                     </div>
                   </div>
                   

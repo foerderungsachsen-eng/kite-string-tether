@@ -1,73 +1,115 @@
-import { useState, useEffect } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { toast } from "@/hooks/use-toast";
 import { Layout } from "@/components/Layout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Badge } from "@/components/ui/badge";
-import { toast } from "@/hooks/use-toast";
-import { ArrowLeft, Send, Upload, FileText, Download } from "lucide-react";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
+import { Eye, RefreshCw, Download } from "lucide-react";
 
-interface Webhook {
+interface Execution {
   id: string;
-  name: string;
-  target_url: string;
-  method: string;
-  headers: any;
-  description?: string;
-  is_active: boolean;
+  webhook_id: string;
+  client_id: string;
+  status: 'SUCCESS' | 'ERROR' | 'TIMEOUT';
+  requested_at: string;
+  duration_ms: number | null;
+  tokens_used: number;
+  request_type: 'TEXT' | 'FILE';
+  status_code: number | null;
+  response: string | null;
+  error: string | null;
+  payload: string | null;
+  webhooks: {
+    name: string;
+  };
 }
 
-const ExecuteWebhook = () => {
-  const { webhookId } = useParams<{ webhookId: string }>();
+const History = () => {
   const { user, isAdmin } = useAuth();
-  const navigate = useNavigate();
-  
-  const [webhook, setWebhook] = useState<Webhook | null>(null);
+  const [executions, setExecutions] = useState<Execution[]>([]);
   const [loading, setLoading] = useState(true);
-  const [executing, setExecuting] = useState(false);
-  const [inputType, setInputType] = useState<'TEXT' | 'FILE'>('TEXT');
-  const [textInput, setTextInput] = useState('');
-  const [fileInput, setFileInput] = useState<File | null>(null);
-  const [response, setResponse] = useState<any>(null);
-  const [executionError, setExecutionError] = useState<string | null>(null);
-  const [tokensBalance, setTokensBalance] = useState<number>(0);
+  const [selectedExecution, setSelectedExecution] = useState<Execution | null>(null);
+  const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
 
   useEffect(() => {
-    if (user && webhookId) {
-      fetchWebhook();
-      fetchTokenBalance();
+    if (user) {
+      fetchExecutions();
     }
-  }, [user, webhookId]);
+  }, [user]);
 
-  const fetchWebhook = async () => {
-    if (!user || !webhookId) return;
+  const fetchExecutions = async () => {
+    if (!user) return;
 
+    setLoading(true);
     try {
-      // Get webhook (will be filtered by RLS policies)
-      const { data: webhookData } = await supabase
-        .from('webhooks')
-        .select('*')
-        .eq('id', webhookId)
-        .single();
+      if (isAdmin) {
+        // Admin can see all executions
+        const { data: executionsData, error } = await supabase
+          .from('executions')
+          .select(`
+            *,
+            webhooks (
+              name
+            )
+          `)
+          .order('requested_at', { ascending: false })
+          .limit(50);
 
-      if (webhookData) {
-        setWebhook(webhookData);
-        // Set input type based on webhook headers if available
-        if (webhookData.headers?.input_type) {
-          setInputType(webhookData.headers.input_type);
+        if (error) {
+          console.error('Admin executions error:', error);
+          throw error;
         }
+
+        setExecutions(executionsData || []);
+      } else {
+        // Get client data first for regular users
+        const { data: clientData, error: clientError } = await supabase
+          .from('clients')
+          .select('id')
+          .eq('user_id', user.id)
+          .single();
+
+        if (clientError) {
+          console.error('Client data error:', clientError);
+          throw clientError;
+        }
+
+        if (!clientData) {
+          console.log('No client data found for user:', user.id);
+          setExecutions([]);
+          return;
+        }
+
+        // Get executions with webhook names for this client
+        const { data: executionsData, error: executionsError } = await supabase
+          .from('executions')
+          .select(`
+            *,
+            webhooks (
+              name
+            )
+          `)
+          .eq('client_id', clientData.id)
+          .order('requested_at', { ascending: false })
+          .limit(50);
+
+        if (executionsError) {
+          console.error('Client executions error:', executionsError);
+          throw executionsError;
+        }
+
+        console.log('Found executions for client:', executionsData?.length || 0);
+        setExecutions(executionsData || []);
       }
     } catch (error) {
-      console.error('Error fetching webhook:', error);
+      console.error('Error fetching executions:', error);
       toast({
-        title: "Fehler",
-        description: "Webhook konnte nicht geladen werden",
+        title: "Fehler beim Laden der Historie",
+        description: error?.message || "Die Ausführungshistorie konnte nicht geladen werden.",
         variant: "destructive",
       });
     } finally {
@@ -75,415 +117,324 @@ const ExecuteWebhook = () => {
     }
   };
 
-  const fetchTokenBalance = async () => {
-    if (!user) return;
-    
-    const { data } = await supabase
-      .from('clients')
-      .select('tokens_balance')
-      .eq('user_id', user.id)
-      .single();
-    
-    if (data) {
-      setTokensBalance(data.tokens_balance);
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'SUCCESS':
+        return 'default';
+      case 'ERROR':
+        return 'destructive';
+      case 'TIMEOUT':
+        return 'secondary';
+      default:
+        return 'outline';
     }
   };
 
-  const executeWebhook = async () => {
-    if (!webhook || !user) return;
-
-    if (tokensBalance <= 0) {
-      toast({
-        title: "Nicht genügend Tokens",
-        description: "Sie haben keine Tokens mehr. Bitte laden Sie Ihr Guthaben auf.",
-        variant: "destructive",
-      });
-      return;
+  const getStatusText = (status: string) => {
+    switch (status) {
+      case 'SUCCESS':
+        return 'Erfolgreich';
+      case 'ERROR':
+        return 'Fehler';
+      case 'TIMEOUT':
+        return 'Timeout';
+      default:
+        return status;
     }
+  };
 
-    if (inputType === 'TEXT' && !textInput.trim()) {
-      toast({
-        title: "Eingabe erforderlich",
-        description: "Bitte geben Sie Text ein",
-        variant: "destructive",
-      });
-      return;
-    }
+  const showExecutionDetails = (execution: Execution) => {
+    setSelectedExecution(execution);
+    setDetailsDialogOpen(true);
+  };
 
-    if (inputType === 'FILE' && !fileInput) {
-      toast({
-        title: "Datei erforderlich",
-        description: "Bitte wählen Sie eine Datei aus",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    setExecuting(true);
-    setResponse(null);
-    setExecutionError(null);
-
+  const downloadBinaryResponse = (execution: Execution) => {
+    if (!execution.response) return;
+    
     try {
-
-      let fileKey: string | null = null;
-      let requestBody: any;
-      let contentType: string;
-
-      if (inputType === 'TEXT') {
-        requestBody = JSON.stringify({ text: textInput });
-        contentType = 'application/json';
-      } else if (inputType === 'FILE' && fileInput) {
-        // Create FormData to send the actual file
-        const formData = new FormData();
-        formData.append('file', fileInput);
-        formData.append('fileName', fileInput.name);
-        formData.append('fileSize', fileInput.size.toString());
-        formData.append('fileType', fileInput.type);
-        
-        requestBody = formData;
-        contentType = 'multipart/form-data';
-        fileKey = `${Date.now()}-${fileInput.name}`;
-      }
-
-      const startTime = Date.now();
-
-      // Prepare headers
-      const headers: Record<string, string> = { ...webhook.headers };
-
-      // Remove internal metadata from headers before sending
-      const { input_type, output_type, ...cleanHeaders } = headers;
-
-      // Set Content-Type only for JSON requests (FormData sets its own Content-Type with boundary)
-      if (inputType === 'TEXT') {
-        cleanHeaders['Content-Type'] = 'application/json';
-      }
-      // For FormData, don't set Content-Type - let the browser set it with boundary
-
-      // Make the actual HTTP request to the webhook
-      const response = await fetch(webhook.target_url, {
-        method: webhook.method,
-        headers: cleanHeaders,
-        body: requestBody
-      });
-
-      const duration = Date.now() - startTime;
-      const responseText = await response.text();
-      let responseData;
-
+      // Try to parse the response to get the actual binary data
+      let binaryData = execution.response;
+      
+      // If it's JSON wrapped, try to extract
       try {
-        responseData = JSON.parse(responseText);
-      } catch {
-        responseData = responseText;
-      }
-
-      // Prepare payload for database storage
-      let payloadForDb: any;
-      if (inputType === 'TEXT') {
-        payloadForDb = { text: textInput };
-      } else {
-        payloadForDb = { 
-          fileName: fileInput?.name,
-          fileSize: fileInput?.size,
-          fileType: fileInput?.type
-        };
-      }
-
-      // Record the execution in the database
-      const { error: executionError } = await supabase
-        .from('executions')
-        .insert({
-          webhook_id: webhook.id,
-          request_type: inputType,
-          payload: JSON.stringify(payloadForDb),
-          file_key: fileKey,
-          status: response.ok ? 'SUCCESS' : 'ERROR',
-          status_code: response.status,
-          response: JSON.stringify(responseData),
-          duration_ms: duration,
-          tokens_used: 1,
-          error: response.ok ? null : `HTTP ${response.status}: ${response.statusText}`
-        });
-
-      if (executionError) {
-        console.error('Error recording execution:', executionError);
-      }
-
-
-      if (response.ok) {
-        // Check if response is binary data
-        if (typeof responseData === 'string' && (responseData.includes('\\u0000') || responseData.includes('��') || /[\x00-\x08\x0E-\x1F\x7F-\x9F]/.test(responseData))) {
-          setResponse({
-            _isBinaryFile: true,
-            _message: 'Binäre Datei empfangen',
-            _originalResponse: responseData
-          });
-        } else {
-          setResponse(responseData);
+        const parsed = JSON.parse(execution.response);
+        if (typeof parsed === 'string') {
+          binaryData = parsed;
         }
-        toast({
-          title: "Webhook erfolgreich ausgeführt",
-          description: `Status: ${response.status}`,
-        });
-      } else {
-        setExecutionError(`HTTP ${response.status}: ${response.statusText}`);
-        toast({
-          title: "Webhook-Fehler",
-          description: `Status: ${response.status}`,
-          variant: "destructive",
-        });
+      } catch {
+        // Use response as is
       }
-
-    } catch (error: any) {
-      console.error('Execution error:', error);
-      setExecutionError(error.message);
+      
+      // Convert the binary string to a Blob
+      const bytes = new Uint8Array(binaryData.length);
+      for (let i = 0; i < binaryData.length; i++) {
+        bytes[i] = binaryData.charCodeAt(i);
+      }
+      
+      const blob = new Blob([bytes], { type: 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      
+      // Get filename from payload if available
+      let filename = 'download';
+      if (execution.payload) {
+        try {
+          const payload = JSON.parse(execution.payload);
+          if (payload.fileName) {
+            filename = payload.fileName;
+          }
+        } catch {
+          // Use default filename
+        }
+      }
+      
+      // Create download link
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
       toast({
-        title: "Ausführungsfehler",
-        description: error.message,
+        title: "Download gestartet",
+        description: `Datei ${filename} wird heruntergeladen.`,
+      });
+    } catch (error) {
+      console.error('Download error:', error);
+      toast({
+        title: "Download-Fehler",
+        description: "Die Datei konnte nicht heruntergeladen werden.",
         variant: "destructive",
       });
-    } finally {
-      setExecuting(false);
+    }
+  };
+  const formatResponse = (response: string | null) => {
+    if (!response) return 'Keine Antwort';
+    
+    try {
+      // Try to parse as JSON first
+      const parsed = JSON.parse(response);
+      return JSON.stringify(parsed, null, 2);
+    } catch {
+      // If not JSON, check if it's binary data
+      if (response.includes('\\u0000') || response.includes('��') || /[\x00-\x08\x0E-\x1F\x7F-\x9F]/.test(response)) {
+        return '[Binäre Datei empfangen - Inhalt kann nicht angezeigt werden]';
+      }
+      return response;
     }
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      setFileInput(file);
-    }
+  const isResponseBinary = (response: string | null) => {
+    if (!response) return false;
+    return response.includes('\\u0000') || response.includes('��') || /[\x00-\x08\x0E-\x1F\x7F-\x9F]/.test(response);
   };
-
-  if (loading) {
-    return (
-      <Layout>
-        <div className="flex items-center justify-center h-96">
-          <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-primary"></div>
-        </div>
-      </Layout>
-    );
-  }
-
-  if (!webhook) {
-    return (
-      <Layout>
-        <div className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Webhook nicht gefunden</CardTitle>
-              <CardDescription>
-                Der angeforderte Webhook konnte nicht gefunden werden.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Button onClick={() => navigate('/webhooks')}>
-                <ArrowLeft className="mr-2 h-4 w-4" />
-                Zurück zu Webhooks
-              </Button>
-            </CardContent>
-          </Card>
-        </div>
-      </Layout>
-    );
-  }
 
   return (
     <Layout>
       <div className="space-y-6">
-        <div className="flex items-center gap-4">
-          <Button variant="outline" size="sm" onClick={() => navigate('/webhooks')}>
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Zurück
-          </Button>
+        <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight">Webhook ausführen</h1>
-            <p className="text-muted-foreground">{webhook.name}</p>
+          <h1 className="text-3xl font-bold tracking-tight">Ausführungshistorie</h1>
+          <p className="text-muted-foreground">Übersicht über alle Webhook-Ausführungen</p>
           </div>
+          <Button onClick={fetchExecutions} disabled={loading}>
+            <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
+            Aktualisieren
+          </Button>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Input Section */}
+        {loading ? (
+          <div className="flex items-center justify-center h-96">
+            <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-primary"></div>
+          </div>
+        ) : executions.length === 0 ? (
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center justify-between">
-                Eingabe
-                <div className="flex items-center gap-2">
-                  <Badge variant="outline">{webhook.method}</Badge>
-                  <Badge variant={webhook.is_active ? "default" : "secondary"}>
-                    {webhook.is_active ? "Aktiv" : "Inaktiv"}
-                  </Badge>
-                </div>
-              </CardTitle>
+              <CardTitle>Keine Ausführungen</CardTitle>
               <CardDescription>
-                Webhook ID: {webhookId}
+                Es wurden noch keine Webhooks ausgeführt.
               </CardDescription>
             </CardHeader>
-            <CardContent className="space-y-6">
-              {/* Input type is now fixed based on webhook settings */}
-              <div className="space-y-3">
-                <Label>Eingabetyp</Label>
-                <div className="flex items-center gap-2">
-                  {inputType === 'TEXT' ? (
-                    <Badge variant="default" className="flex items-center gap-2">
-                      <FileText className="h-4 w-4" />
-                      Text
-                    </Badge>
-                  ) : (
-                    <Badge variant="default" className="flex items-center gap-2">
-                      <Upload className="h-4 w-4" />
-                      Datei
-                    </Badge>
-                  )}
-                  <span className="text-sm text-muted-foreground">
-                    (Vom Administrator festgelegt)
-                  </span>
-                </div>
-              </div>
-
-              {inputType === 'TEXT' ? (
-                <div className="space-y-2">
-                  <Label htmlFor="text-input">Text eingeben</Label>
-                  <Textarea
-                    id="text-input"
-                    value={textInput}
-                    onChange={(e) => setTextInput(e.target.value)}
-                    placeholder="Geben Sie hier Ihren Text ein..."
-                    rows={6}
-                  />
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  <Label htmlFor="file-input">Datei auswählen</Label>
-                  <Input
-                    id="file-input"
-                    type="file"
-                    onChange={handleFileChange}
-                    className="cursor-pointer"
-                  />
-                  {fileInput && (
-                    <div className="text-sm text-muted-foreground">
-                      Ausgewählt: {fileInput.name} ({(fileInput.size / 1024).toFixed(1)} KB)
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div className="flex items-center justify-between pt-4 border-t">
-                <div className="text-sm text-muted-foreground">
-                  Token-Guthaben: {tokensBalance}
-                </div>
-                <Button 
-                  onClick={executeWebhook} 
-                  disabled={executing || !webhook.is_active || tokensBalance <= 0}
-                  className="min-w-[120px]"
-                >
-                  {executing ? (
-                    <>
-                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                      Ausführen...
-                    </>
-                  ) : (
-                    <>
-                      <Send className="mr-2 h-4 w-4" />
-                      Ausführen
-                    </>
-                  )}
-                </Button>
-              </div>
-            </CardContent>
           </Card>
-
-          {/* Response Section */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Antwort</CardTitle>
-              <CardDescription>
-                Antwort vom Webhook-Endpunkt
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {!response && !executionError ? (
-                <div className="text-center py-12 text-muted-foreground">
-                  <Send className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                  <p>Führen Sie den Webhook aus, um die Antwort zu sehen</p>
-                </div>
-              ) : executionError ? (
-                <div className="space-y-4">
-                  <div className="p-4 bg-destructive/10 border border-destructive/20 rounded-lg">
-                    <h4 className="font-medium text-destructive mb-2">Fehler</h4>
-                    <p className="text-sm text-destructive/80">{executionError}</p>
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-4">
+        ) : (
+          <div className="space-y-4">
+            {executions.map((execution) => (
+              <Card key={execution.id}>
+                <CardContent className="p-6">
                   <div className="flex items-center justify-between">
-                    <Badge variant="default">Erfolgreich</Badge>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        navigator.clipboard.writeText(JSON.stringify(response, null, 2));
-                        toast({ title: "Kopiert", description: "Antwort in Zwischenablage kopiert" });
-                      }}
-                    >
-                      <Download className="h-4 w-4 mr-2" />
-                      Kopieren
-                    </Button>
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-3">
+                        <h3 className="font-semibold">{execution.webhooks.name}</h3>
+                        <Badge variant={getStatusColor(execution.status) as any}>
+                          {getStatusText(execution.status)}
+                        </Badge>
+                        {execution.status_code && (
+                          <Badge variant="outline">
+                            HTTP {execution.status_code}
+                          </Badge>
+                        )}
+                        <Badge variant="outline">
+                          {execution.request_type}
+                        </Badge>
+                      </div>
+                      
+                      <div className="flex items-center gap-4 text-sm text-muted-foreground">
+                        <span>
+                          {new Date(execution.requested_at).toLocaleString('de-DE')}
+                        </span>
+                        {execution.duration_ms && (
+                          <span>{execution.duration_ms}ms</span>
+                        )}
+                        <span>{execution.tokens_used} Token verwendet</span>
+                      </div>
+                    </div>
+                    
+                    <div className="flex items-center gap-2">
+                      <Button 
+                        variant="outline" 
+                        size="sm"
+                        onClick={() => showExecutionDetails(execution)}
+                      >
+                        <Eye className="h-4 w-4 mr-2" />
+                        Details
+                      </Button>
+                      {execution.status === 'SUCCESS' && isResponseBinary(execution.response) && (
+                        <Button 
+                          variant="outline" 
+                          size="sm"
+                          onClick={() => downloadBinaryResponse(execution)}
+                        >
+                          <Download className="h-4 w-4 mr-2" />
+                          Download
+                        </Button>
+                      )}
+                    </div>
                   </div>
                   
-                  <div className="bg-muted/50 rounded-lg p-4">
-                    {response && typeof response === 'object' && response._isBinaryFile ? (
-                      <div className="text-center py-8">
-                        <div className="text-4xl mb-4">📁</div>
-                        <div className="text-lg font-medium mb-2">Binäre Datei empfangen</div>
-                        <p className="text-sm text-muted-foreground mb-4">
-                          Der Webhook hat eine Datei zurückgegeben. Der Inhalt kann nicht als Text angezeigt werden.
-                        </p>
-                        <Badge variant="outline">Datei erfolgreich empfangen</Badge>
-                      </div>
-                    ) : (
-                      <pre className="text-sm overflow-auto max-h-96">
-                        {typeof response === 'string' 
-                          ? response 
-                          : JSON.stringify(response, null, 2)
+                  {execution.error && (
+                    <div className="mt-4 p-3 bg-destructive/10 border border-destructive/20 rounded-lg">
+                      <p className="text-sm text-destructive font-medium">Fehler:</p>
+                      <p className="text-sm text-destructive/80 mt-1">
+                        {typeof execution.error === 'string' 
+                          ? execution.error 
+                          : JSON.stringify(execution.error)
                         }
+                      </p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+
+        {/* Execution Details Dialog */}
+        <Dialog open={detailsDialogOpen} onOpenChange={setDetailsDialogOpen}>
+          <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Ausführungsdetails</DialogTitle>
+              <DialogDescription>
+                Details für Webhook: {selectedExecution?.webhooks?.name}
+              </DialogDescription>
+            </DialogHeader>
+            
+            {selectedExecution && (
+              <div className="space-y-6">
+                {/* Basic Info */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label className="text-sm font-medium">Status</Label>
+                    <div className="mt-1">
+                      <Badge variant={getStatusColor(selectedExecution.status) as any}>
+                        {getStatusText(selectedExecution.status)}
+                      </Badge>
+                    </div>
+                  </div>
+                  <div>
+                    <Label className="text-sm font-medium">Ausführungszeit</Label>
+                    <p className="mt-1 text-sm">{selectedExecution.duration_ms}ms</p>
+                  </div>
+                  <div>
+                    <Label className="text-sm font-medium">Token verwendet</Label>
+                    <p className="mt-1 text-sm">{selectedExecution.tokens_used}</p>
+                  </div>
+                  <div>
+                    <Label className="text-sm font-medium">Zeitpunkt</Label>
+                    <p className="mt-1 text-sm">
+                      {new Date(selectedExecution.requested_at).toLocaleString('de-DE')}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Request Details */}
+                <div>
+                  <Label className="text-sm font-medium">Anfrage</Label>
+                  <div className="mt-2 p-3 bg-muted rounded-lg">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Badge variant="outline">{selectedExecution.request_type}</Badge>
+                      {selectedExecution.status_code && (
+                        <Badge variant="outline">HTTP {selectedExecution.status_code}</Badge>
+                      )}
+                    </div>
+                    {selectedExecution.payload && (
+                      <pre className="text-xs overflow-auto">
+                        {JSON.stringify(JSON.parse(selectedExecution.payload), null, 2)}
                       </pre>
                     )}
                   </div>
                 </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
 
-        {/* Webhook Details - Only show to admins */}
-        {isAdmin && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Webhook-Details</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                {/* Response */}
                 <div>
-                  <Label className="text-muted-foreground">Ziel-URL</Label>
-                  <p className="font-mono break-all">{webhook.target_url}</p>
+                  <Label className="text-sm font-medium">Antwort</Label>
+                  <div className="mt-2 p-3 bg-muted rounded-lg">
+                    {isResponseBinary(selectedExecution.response) ? (
+                              <Download className="h-4 w-4 mr-2" />
+                              Datei herunterladen
+                            </Button>
+                          </div>
+                        </div>
+                      <div className="text-center py-4">
+                        <div className="text-muted-foreground mb-2">
+                          📁 Binäre Datei empfangen
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Der Webhook hat eine Datei zurückgegeben. Der Inhalt kann nicht als Text angezeigt werden.
+                        </p>
+                      </div>
+                    ) : (
+                      <pre className="text-xs overflow-auto max-h-96">
+                        {formatResponse(selectedExecution.response)}
+                      </pre>
+                    )}
+                  </div>
                 </div>
-                <div>
-                  <Label className="text-muted-foreground">Methode</Label>
-                  <p>{webhook.method}</p>
-                </div>
-                {webhook.description && (
-                  <div className="md:col-span-2">
-                    <Label className="text-muted-foreground">Beschreibung</Label>
-                    <p>{webhook.description}</p>
+
+                {/* Error Details */}
+                {selectedExecution.error && (
+                  <div>
+                    <Label className="text-sm font-medium text-destructive">Fehlerdetails</Label>
+                    <div className="mt-2 p-3 bg-destructive/10 border border-destructive/20 rounded-lg">
+                      <pre className="text-xs text-destructive overflow-auto">
+                        {selectedExecution.error}
+                      </pre>
+                    </div>
                   </div>
                 )}
               </div>
-            </CardContent>
-          </Card>
-        )}
+            )}
+            
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setDetailsDialogOpen(false)}>
+                Schließen
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </Layout>
   );
 };
 
-export default ExecuteWebhook;
+export default History;
