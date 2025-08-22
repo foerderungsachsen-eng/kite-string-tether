@@ -34,8 +34,6 @@ const History = () => {
   const [loading, setLoading] = useState(true);
   const [selectedExecution, setSelectedExecution] = useState<Execution | null>(null);
   const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
-  const [tokenBalance, setTokenBalance] = useState<number>(0);
-  const [tokensRequired, setTokensRequired] = useState<number>(1);
 
   useEffect(() => {
     if (user) {
@@ -71,7 +69,7 @@ const History = () => {
         // Get client data first for regular users
         const { data: clientData, error: clientError } = await supabase
           .from('clients')
-          .select('id, tokens_balance')
+          .select('id')
           .eq('user_id', user.id)
           .single();
 
@@ -85,8 +83,6 @@ const History = () => {
           setExecutions([]);
           return;
         }
-
-        setTokenBalance(clientData.tokens_balance);
 
         // Get executions with webhook names for this client
         const { data: executionsData, error: executionsError } = await supabase
@@ -113,7 +109,7 @@ const History = () => {
       console.error('Error fetching executions:', error);
       toast({
         title: "Fehler beim Laden der Historie",
-        description: error?.message || "Die Ausführungshistorie konnte nicht geladen werden.",
+        description: (error && typeof error.message === 'string') ? error.message : "Die Ausführungshistorie konnte nicht geladen werden.",
         variant: "destructive",
       });
     } finally {
@@ -208,7 +204,7 @@ const History = () => {
       console.error('Download error:', error);
       toast({
         title: "Download-Fehler",
-        description: "Die Datei konnte nicht heruntergeladen werden.",
+        description: (error && typeof error.message === 'string') ? error.message : "Die Datei konnte nicht heruntergeladen werden.",
         variant: "destructive",
       });
     }
@@ -375,4 +371,65 @@ const History = () => {
                 <div>
                   <Label className="text-sm font-medium">Anfrage</Label>
                   <div className="mt-2 p-3 bg-muted rounded-lg">
-                    
+                    <div className="flex items-center gap-2 mb-2">
+                      <Badge variant="outline">{selectedExecution.request_type}</Badge>
+                      {selectedExecution.status_code && (
+                        <Badge variant="outline">HTTP {selectedExecution.status_code}</Badge>
+                      )}
+                    </div>
+                    {selectedExecution.payload && (
+                      <pre className="text-xs overflow-auto">
+                        {JSON.stringify(JSON.parse(selectedExecution.payload), null, 2)}
+                      </pre>
+                    )}
+                  </div>
+                </div>
+
+                {/* Response */}
+                <div>
+                  <Label className="text-sm font-medium">Antwort</Label>
+                  <div className="mt-2 p-3 bg-muted rounded-lg">
+                    {isResponseBinary(selectedExecution.response) ? (
+                      <div className="text-center py-4">
+                        <div className="text-muted-foreground mb-2">
+                          📁 Binäre Datei empfangen
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Der Webhook hat eine Datei zurückgegeben. Der Inhalt kann nicht als Text angezeigt werden.
+                        </p>
+                      </div>
+                    ) : (
+                      <pre className="text-xs overflow-auto max-h-96">
+                        {formatResponse(selectedExecution.response)}
+                      </pre>
+                    )}
+                  </div>
+                </div>
+
+                {/* Error Details */}
+                {selectedExecution.error && (
+                  <div>
+                    <Label className="text-sm font-medium text-destructive">Fehlerdetails</Label>
+                    <div className="mt-2 p-3 bg-destructive/10 border border-destructive/20 rounded-lg">
+                      <pre className="text-xs text-destructive overflow-auto">
+                        {selectedExecution.error}
+                      </pre>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setDetailsDialogOpen(false)}>
+                Schließen
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
+    </Layout>
+  );
+};
+
+export default History;
