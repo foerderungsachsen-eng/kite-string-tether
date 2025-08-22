@@ -12,6 +12,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/hooks/use-toast";
 import { ArrowLeft, Send, Upload, FileText, Download } from "lucide-react";
+import { useAuth } from "@/hooks/useAuth";
 
 interface Webhook {
   id: string;
@@ -25,7 +26,7 @@ interface Webhook {
 
 const ExecuteWebhook = () => {
   const { webhookId } = useParams<{ webhookId: string }>();
-  const { user } = useAuth();
+  const { user, isAdmin } = useAuth();
   const navigate = useNavigate();
   
   const [webhook, setWebhook] = useState<Webhook | null>(null);
