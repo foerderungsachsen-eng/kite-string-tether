@@ -4,11 +4,12 @@ import { useAuth } from "@/hooks/useAuth";
 import { toast } from "@/hooks/use-toast";
 import { Layout } from "@/components/Layout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import { Eye, RefreshCw, Download } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { ArrowLeft } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
@@ -20,37 +21,17 @@ interface User {
   client_name?: string;
 }
 
-interface Execution {
-  id: string;
-  webhook_id: string;
-  client_id: string;
-  status: 'SUCCESS' | 'ERROR' | 'TIMEOUT';
-  requested_at: string;
-  duration_ms: number | null;
-  tokens_used: number;
-  request_type: 'TEXT' | 'FILE';
-  status_code: number | null;
-  response: string | null;
-  error: string | null;
-  payload: string | null;
-  webhooks: {
-    name: string;
-  };
-}
-
-const History = () => {
+const NewWebhook = () => {
   const { user, isAdmin } = useAuth();
   const navigate = useNavigate();
-  const [loading, setLoading] = useState(true);
   const [users, setUsers] = useState<User[]>([]);
   const [usersLoading, setUsersLoading] = useState(true);
-  const [executions, setExecutions] = useState<Execution[]>([]);
-  const [selectedExecution, setSelectedExecution] = useState<Execution | null>(null);
-  const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
   const [form, setForm] = useState({
     name: '',
     description: '',
     url: '',
+    method: 'POST' as 'GET' | 'POST' | 'PUT' | 'DELETE',
     headers: '{}',
     input_type: 'TEXT' as 'TEXT' | 'FILE',
     output_type: 'TEXT' as 'TEXT' | 'FILE',
@@ -58,12 +39,6 @@ const History = () => {
     is_active: true,
     selected_user_id: ''
   });
-
-  useEffect(() => {
-    if (user) {
-      fetchExecutions();
-    }
-  }, [user]);
 
   useEffect(() => {
     if (user && isAdmin) {
@@ -81,7 +56,7 @@ const History = () => {
             <p className="text-muted-foreground mb-4">
               Sie haben keine Berechtigung, neue Webhooks zu erstellen.
             </p>
-            <Button onClick={() => navigate('/dashboard')}>
+            <Button onClick={() => navigate('/')}>
               <ArrowLeft className="h-4 w-4 mr-2" />
               Zurück zum Dashboard
             </Button>
@@ -116,8 +91,8 @@ const History = () => {
         user_id: user.user_id,
         email: user.email,
         role: user.role,
-        client_id: user.clients?.[0]?.id,
-        client_name: user.clients?.[0]?.name || user.email.split('@')[0]
+        client_id: (user.clients as any)?.[0]?.id,
+        client_name: (user.clients as any)?.[0]?.name || user.email.split('@')[0]
       })).filter(user => user.client_id); // Only users with client records
 
       setUsers(formattedUsers);
@@ -133,82 +108,6 @@ const History = () => {
     }
   };
 
-  const fetchExecutions = async () => {
-    if (!user) return;
-
-    setLoading(true);
-    try {
-      if (isAdmin) {
-        // Admin can see all executions
-        const { data: executionsData, error } = await supabase
-          .from('executions')
-          .select(`
-            *,
-            webhooks (
-              name
-            )
-          `)
-          .order('requested_at', { ascending: false })
-          .limit(50);
-
-        if (error) {
-          console.error('Admin executions error:', error);
-          throw error;
-        }
-
-        setExecutions(executionsData || []);
-      } else {
-        // Get client data first for regular users
-        const { data: clientData, error: clientError } = await supabase
-          .from('clients')
-          .select('id')
-          .eq('user_id', user.id)
-          .single();
-
-        if (clientError) {
-          console.error('Client data error:', clientError);
-          throw clientError;
-        }
-
-        if (!clientData) {
-          console.log('No client data found for user:', user.id);
-          setExecutions([]);
-          return;
-        }
-
-        // Get executions with webhook names for this client
-        const { data: executionsData, error: executionsError } = await supabase
-          .from('executions')
-          .select(`
-            *,
-            webhooks (
-              name
-            )
-          `)
-          .eq('client_id', clientData.id)
-          .order('requested_at', { ascending: false })
-          .limit(50);
-
-        if (executionsError) {
-          console.error('Client executions error:', executionsError);
-          throw executionsError;
-        }
-
-        console.log('Found executions for client:', executionsData?.length || 0);
-        setExecutions(executionsData || []);
-      }
-    } catch (error) {
-      console.error('Error fetching executions:', error);
-      toast({
-        title: "Fehler beim Laden der Historie",
-        description: error?.message || "Die Ausführungshistorie konnte nicht geladen werden.",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const createWebhook = async () => {
     if (!form.name.trim() || !form.url.trim() || !form.selected_user_id.trim()) {
       toast({
@@ -219,7 +118,7 @@ const History = () => {
       return;
     }
 
-    setLoading(true);
+    setIsCreating(true);
     try {
       // Validate headers JSON
       try {
@@ -240,6 +139,7 @@ const History = () => {
           name: form.name.trim(),
           description: form.description.trim() || null,
           url: form.url.trim(),
+          method: form.method,
           headers: JSON.parse(form.headers),
           input_type: form.input_type,
           output_type: form.output_type,
@@ -255,130 +155,17 @@ const History = () => {
         description: "Der Webhook wurde erfolgreich erstellt.",
       });
 
-      navigate('/admin/webhooks');
+      navigate('/webhooks');
     } catch (error) {
       console.error('Error creating webhook:', error);
       toast({
         title: "Fehler beim Erstellen",
-        description: error?.message || "Der Webhook konnte nicht erstellt werden.",
+        description: (error && typeof error.message === 'string') ? error.message : "Der Webhook konnte nicht erstellt werden.",
         variant: "destructive"
       });
     } finally {
-      setLoading(false);
+      setIsCreating(false);
     }
-  };
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'SUCCESS':
-        return 'default';
-      case 'ERROR':
-        return 'destructive';
-      case 'TIMEOUT':
-        return 'secondary';
-      default:
-        return 'outline';
-    }
-  };
-
-  const getStatusText = (status: string) => {
-    switch (status) {
-      case 'SUCCESS':
-        return 'Erfolgreich';
-      case 'ERROR':
-        return 'Fehler';
-      case 'TIMEOUT':
-        return 'Timeout';
-      default:
-        return status;
-    }
-  };
-
-  const showExecutionDetails = (execution: Execution) => {
-    setSelectedExecution(execution);
-    setDetailsDialogOpen(true);
-  };
-
-  const downloadBinaryResponse = (execution: Execution) => {
-    if (!execution.response) return;
-    
-    try {
-      // Try to parse the response to get the actual binary data
-      let binaryData = execution.response;
-      
-      // If it's JSON wrapped, try to extract
-      try {
-        const parsed = JSON.parse(execution.response);
-        if (typeof parsed === 'string') {
-          binaryData = parsed;
-        }
-      } catch {
-        // Use response as is
-      }
-      
-      // Convert the binary string to a Blob
-      const bytes = new Uint8Array(binaryData.length);
-      for (let i = 0; i < binaryData.length; i++) {
-        bytes[i] = binaryData.charCodeAt(i);
-      }
-      
-      const blob = new Blob([bytes], { type: 'application/octet-stream' });
-      const url = URL.createObjectURL(blob);
-      
-      // Get filename from payload if available
-      let filename = 'download';
-      if (execution.payload) {
-        try {
-          const payload = JSON.parse(execution.payload);
-          if (payload.fileName) {
-            filename = payload.fileName;
-          }
-        } catch {
-          // Use default filename
-        }
-      }
-      
-      // Create download link
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      
-      toast({
-        title: "Download gestartet",
-        description: `Datei ${filename} wird heruntergeladen.`,
-      });
-    } catch (error) {
-      console.error('Download error:', error);
-      toast({
-        title: "Download-Fehler",
-        description: "Die Datei konnte nicht heruntergeladen werden.",
-        variant: "destructive",
-      });
-    }
-  };
-  const formatResponse = (response: string | null) => {
-    if (!response) return 'Keine Antwort';
-    
-    try {
-      // Try to parse as JSON first
-      const parsed = JSON.parse(response);
-      return JSON.stringify(parsed, null, 2);
-    } catch {
-      // If not JSON, check if it's binary data
-      if (response.includes('\\u0000') || response.includes('��') || /[\x00-\x08\x0E-\x1F\x7F-\x9F]/.test(response)) {
-        return '[Binäre Datei empfangen - Inhalt kann nicht angezeigt werden]';
-      }
-      return response;
-    }
-  };
-
-  const isResponseBinary = (response: string | null) => {
-    if (!response) return false;
-    return response.includes('\\u0000') || response.includes('��') || /[\x00-\x08\x0E-\x1F\x7F-\x9F]/.test(response);
   };
 
   return (
@@ -386,13 +173,16 @@ const History = () => {
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-          <h1 className="text-3xl font-bold tracking-tight">Ausführungshistorie</h1>
-          <p className="text-muted-foreground">Übersicht über alle Webhook-Ausführungen</p>
+            <Button variant="outline" size="sm" onClick={() => navigate('/webhooks')}>
+              <ArrowLeft className="h-4 w-4 mr-2" />
+              Zurück zu Webhooks
+            </Button>
           </div>
-          <Button onClick={fetchExecutions} disabled={loading}>
-            <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
-            Aktualisieren
-          </Button>
+        </div>
+        
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Neuer Webhook</h1>
+          <p className="text-muted-foreground">Erstellen Sie einen neuen Webhook für einen Benutzer</p>
         </div>
 
         <Card>
@@ -426,7 +216,7 @@ const History = () => {
               </p>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <Label htmlFor="name">Name *</Label>
                 <Input
@@ -437,6 +227,25 @@ const History = () => {
                 />
               </div>
               <div>
+                <Label>HTTP Methode</Label>
+                <Select 
+                  value={form.method} 
+                  onValueChange={(value: 'GET' | 'POST' | 'PUT' | 'DELETE') => setForm(prev => ({ ...prev, method: value }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="GET">GET</SelectItem>
+                    <SelectItem value="POST">POST</SelectItem>
+                    <SelectItem value="PUT">PUT</SelectItem>
+                    <SelectItem value="DELETE">DELETE</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div>
                 <Label htmlFor="url">URL *</Label>
                 <Input
                   id="url"
@@ -445,7 +254,6 @@ const History = () => {
                   onChange={(e) => setForm(prev => ({ ...prev, url: e.target.value }))}
                   placeholder="https://api.example.com/webhook"
                 />
-              </div>
             </div>
 
             <div>
@@ -525,8 +333,8 @@ const History = () => {
             </div>
 
             <div className="flex gap-4">
-              <Button onClick={createWebhook} disabled={loading}>
-                {loading ? (
+              <Button onClick={createWebhook} disabled={isCreating}>
+                {isCreating ? (
                   <>
                     <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
                     Erstelle...
@@ -535,199 +343,15 @@ const History = () => {
                   'Webhook erstellen'
                 )}
               </Button>
-              <Button variant="outline" onClick={() => navigate('/admin/webhooks')}>
+              <Button variant="outline" onClick={() => navigate('/webhooks')}>
                 Abbrechen
               </Button>
             </div>
           </CardContent>
         </Card>
-
-        {loading ? (
-          <div className="flex items-center justify-center h-96">
-            <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-primary"></div>
-          </div>
-        ) : executions.length === 0 ? (
-          <Card>
-            <CardHeader>
-              <CardTitle>Keine Ausführungen</CardTitle>
-              <CardDescription>
-                Es wurden noch keine Webhooks ausgeführt.
-              </CardDescription>
-            </CardHeader>
-          </Card>
-        ) : (
-          <div className="space-y-4">
-            {executions.map((execution) => (
-              <Card key={execution.id}>
-                <CardContent className="p-6">
-                  <div className="flex items-center justify-between">
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-3">
-                        <h3 className="font-semibold">{execution.webhooks.name}</h3>
-                        <Badge variant={getStatusColor(execution.status) as any}>
-                          {getStatusText(execution.status)}
-                        </Badge>
-                        {execution.status_code && (
-                          <Badge variant="outline">
-                            HTTP {execution.status_code}
-                          </Badge>
-                        )}
-                        <Badge variant="outline">
-                          {execution.request_type}
-                        </Badge>
-                      </div>
-                      
-                      <div className="flex items-center gap-4 text-sm text-muted-foreground">
-                        <span>
-                          {new Date(execution.requested_at).toLocaleString('de-DE')}
-                        </span>
-                        {execution.duration_ms && (
-                          <span>{execution.duration_ms}ms</span>
-                        )}
-                        <span>{execution.tokens_used} Token verwendet</span>
-                      </div>
-                    </div>
-                    
-                    <div className="flex items-center gap-2">
-                      <Button 
-                        variant="outline" 
-                        size="sm"
-                        onClick={() => showExecutionDetails(execution)}
-                      >
-                        <Eye className="h-4 w-4 mr-2" />
-                        Details
-                      </Button>
-                      {execution.status === 'SUCCESS' && isResponseBinary(execution.response) && (
-                        <Button 
-                          variant="outline" 
-                          size="sm"
-                          onClick={() => downloadBinaryResponse(execution)}
-                        >
-                          <Download className="h-4 w-4 mr-2" />
-                          Download
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                  
-                  {execution.error && (
-                    <div className="mt-4 p-3 bg-destructive/10 border border-destructive/20 rounded-lg">
-                      <p className="text-sm text-destructive font-medium">Fehler:</p>
-                      <p className="text-sm text-destructive/80 mt-1">
-                        {typeof execution.error === 'string' 
-                          ? execution.error 
-                          : JSON.stringify(execution.error)
-                        }
-                      </p>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        )}
-
-        {/* Execution Details Dialog */}
-        <Dialog open={detailsDialogOpen} onOpenChange={setDetailsDialogOpen}>
-          <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>Ausführungsdetails</DialogTitle>
-              <DialogDescription>
-                Details für Webhook: {selectedExecution?.webhooks?.name}
-              </DialogDescription>
-            </DialogHeader>
-            
-            {selectedExecution && (
-              <div className="space-y-6">
-                {/* Basic Info */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <Label className="text-sm font-medium">Status</Label>
-                    <div className="mt-1">
-                      <Badge variant={getStatusColor(selectedExecution.status) as any}>
-                        {getStatusText(selectedExecution.status)}
-                      </Badge>
-                    </div>
-                  </div>
-                  <div>
-                    <Label className="text-sm font-medium">Ausführungszeit</Label>
-                    <p className="mt-1 text-sm">{selectedExecution.duration_ms}ms</p>
-                  </div>
-                  <div>
-                    <Label className="text-sm font-medium">Token verwendet</Label>
-                    <p className="mt-1 text-sm">{selectedExecution.tokens_used}</p>
-                  </div>
-                  <div>
-                    <Label className="text-sm font-medium">Zeitpunkt</Label>
-                    <p className="mt-1 text-sm">
-                      {new Date(selectedExecution.requested_at).toLocaleString('de-DE')}
-                    </p>
-                  </div>
-                </div>
-
-                {/* Request Details */}
-                <div>
-                  <Label className="text-sm font-medium">Anfrage</Label>
-                  <div className="mt-2 p-3 bg-muted rounded-lg">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Badge variant="outline">{selectedExecution.request_type}</Badge>
-                      {selectedExecution.status_code && (
-                        <Badge variant="outline">HTTP {selectedExecution.status_code}</Badge>
-                      )}
-                    </div>
-                    {selectedExecution.payload && (
-                      <pre className="text-xs overflow-auto">
-                        {JSON.stringify(JSON.parse(selectedExecution.payload), null, 2)}
-                      </pre>
-                    )}
-                  </div>
-                </div>
-
-                {/* Response */}
-                <div>
-                  <Label className="text-sm font-medium">Antwort</Label>
-                  <div className="mt-2 p-3 bg-muted rounded-lg">
-                    {isResponseBinary(selectedExecution.response) ? (
-                      <div className="text-center py-4">
-                        <div className="text-muted-foreground mb-2">
-                          📁 Binäre Datei empfangen
-                        </div>
-                        <p className="text-xs text-muted-foreground">
-                          Der Webhook hat eine Datei zurückgegeben. Der Inhalt kann nicht als Text angezeigt werden.
-                        </p>
-                      </div>
-                    ) : (
-                      <pre className="text-xs overflow-auto max-h-96">
-                        {formatResponse(selectedExecution.response)}
-                      </pre>
-                    )}
-                  </div>
-                </div>
-
-                {/* Error Details */}
-                {selectedExecution.error && (
-                  <div>
-                    <Label className="text-sm font-medium text-destructive">Fehlerdetails</Label>
-                    <div className="mt-2 p-3 bg-destructive/10 border border-destructive/20 rounded-lg">
-                      <pre className="text-xs text-destructive overflow-auto">
-                        {selectedExecution.error}
-                      </pre>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-            
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setDetailsDialogOpen(false)}>
-                Schließen
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
       </div>
     </Layout>
   );
 };
 
-export default History;
+export default NewWebhook;
