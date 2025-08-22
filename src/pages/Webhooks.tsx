@@ -6,8 +6,11 @@ import { Layout } from "@/components/Layout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Globe, Plus, Settings, Play, Users } from "lucide-react";
+import { Globe, Plus, Settings, Play, Users, Trash2, Edit } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
 
 interface Webhook {
   id: string;
@@ -17,34 +20,91 @@ interface Webhook {
   is_active: boolean;
   description?: string;
   created_at: string;
+  client_id: string;
   webhook_assignments?: { count: number }[];
   assigned_users?: number;
+  client_name?: string;
+  client_email?: string;
+}
+
+interface Client {
+  id: string;
+  name: string;
+  user_id: string;
+  email?: string;
 }
 
 const Webhooks = () => {
   const { user, isAdmin } = useAuth();
   const navigate = useNavigate();
   const [webhooks, setWebhooks] = useState<Webhook[]>([]);
+  const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [editClientDialogOpen, setEditClientDialogOpen] = useState(false);
+  const [selectedWebhook, setSelectedWebhook] = useState<Webhook | null>(null);
+  const [selectedClientId, setSelectedClientId] = useState("");
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
 
   useEffect(() => {
     if (user) {
       fetchWebhooks();
+      if (isAdmin) {
+        fetchClients();
+      }
     }
   }, [user]);
+
+  const fetchClients = async () => {
+    try {
+      // Get all active clients
+      const { data: clientsData, error: clientsError } = await supabase
+        .from('clients')
+        .select('id, name, user_id')
+        .eq('is_active', true)
+        .order('name');
+
+      if (clientsError) throw clientsError;
+
+      // Get profile information for each client
+      const clientsWithProfiles = await Promise.all(
+        (clientsData || []).map(async (client) => {
+          const { data: profileData } = await supabase
+            .from('profiles')
+            .select('email')
+            .eq('user_id', client.user_id)
+            .single();
+
+          return {
+            id: client.id,
+            name: client.name,
+            user_id: client.user_id,
+            email: profileData?.email || 'No email'
+          };
+        })
+      );
+
+      setClients(clientsWithProfiles);
+    } catch (error) {
+      console.error('Error fetching clients:', error);
+    }
+  };
 
   const fetchWebhooks = async () => {
     if (!user) return;
 
     try {
       if (isAdmin) {
-        // Admins can see all webhooks - simplified query first
+        // Admins see ALL webhooks - force query without RLS restrictions
         const { data, error } = await supabase
           .from('webhooks')
           .select('*')
           .order('created_at', { ascending: false });
 
         if (error) throw error;
+        
+        console.log('Admin fetched webhooks:', data); // Debug log
         
         // Get client information for each webhook
         const webhooksWithClients = await Promise.all(
@@ -77,6 +137,7 @@ const Webhooks = () => {
           })
         );
         
+        console.log('Webhooks with client data:', webhooksWithClients); // Debug log
         setWebhooks(webhooksWithClients);
       } else {
         // Regular users see only their assigned webhooks
@@ -105,12 +166,86 @@ const Webhooks = () => {
       console.error('Error fetching webhooks:', error);
       toast({
         title: "Fehler beim Laden der Webhooks",
-        description: "Die Webhooks konnten nicht geladen werden. Bitte versuchen Sie es erneut.",
+        description: `Die Webhooks konnten nicht geladen werden: ${error.message}`,
         variant: "destructive"
       });
     } finally {
       setLoading(false);
     }
+  };
+
+  const deleteWebhook = async () => {
+    if (!selectedWebhook) return;
+
+    setIsDeleting(true);
+    try {
+      const { error } = await supabase
+        .from('webhooks')
+        .delete()
+        .eq('id', selectedWebhook.id);
+
+      if (error) throw error;
+
+      toast({
+        title: "Webhook gelöscht",
+        description: `Webhook "${selectedWebhook.name}" wurde erfolgreich gelöscht.`,
+      });
+
+      setDeleteDialogOpen(false);
+      setSelectedWebhook(null);
+      fetchWebhooks(); // Refresh the list
+    } catch (error: any) {
+      toast({
+        title: "Fehler beim Löschen",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const updateWebhookClient = async () => {
+    if (!selectedWebhook || !selectedClientId) return;
+
+    setIsUpdating(true);
+    try {
+      const { error } = await supabase
+        .from('webhooks')
+        .update({ client_id: selectedClientId })
+        .eq('id', selectedWebhook.id);
+
+      if (error) throw error;
+
+      toast({
+        title: "Client geändert",
+        description: `Webhook "${selectedWebhook.name}" wurde einem neuen Client zugewiesen.`,
+      });
+
+      setEditClientDialogOpen(false);
+      setSelectedWebhook(null);
+      setSelectedClientId("");
+      fetchWebhooks(); // Refresh the list
+    } catch (error: any) {
+      toast({
+        title: "Fehler beim Ändern",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  const openDeleteDialog = (webhook: Webhook) => {
+    setSelectedWebhook(webhook);
+    setDeleteDialogOpen(true);
+  };
+
+  const openEditClientDialog = (webhook: Webhook) => {
+    setSelectedWebhook(webhook);
+    setSelectedClientId(webhook.client_id);
+    setEditClientDialogOpen(true);
   };
 
   const executeWebhook = (webhookId: string) => {
@@ -146,6 +281,13 @@ const Webhooks = () => {
             )}
           </div>
         </div>
+
+        {/* Debug info for admin */}
+        {isAdmin && (
+          <div className="text-sm text-muted-foreground">
+            Debug: Gefundene Webhooks: {webhooks.length}
+          </div>
+        )}
 
         {loading ? (
           <div className="flex items-center justify-center h-96">
@@ -255,6 +397,64 @@ const Webhooks = () => {
             ))}
           </div>
         )}
+
+        {/* Delete Webhook Dialog */}
+        <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Webhook löschen</DialogTitle>
+              <DialogDescription>
+                Sind Sie sicher, dass Sie den Webhook "{selectedWebhook?.name}" löschen möchten? 
+                Diese Aktion kann nicht rückgängig gemacht werden.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setDeleteDialogOpen(false)}>
+                Abbrechen
+              </Button>
+              <Button variant="destructive" onClick={deleteWebhook} disabled={isDeleting}>
+                {isDeleting ? "Lösche..." : "Löschen"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Edit Client Dialog */}
+        <Dialog open={editClientDialogOpen} onOpenChange={setEditClientDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Client ändern</DialogTitle>
+              <DialogDescription>
+                Wählen Sie einen neuen Client für den Webhook "{selectedWebhook?.name}".
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="client-select">Neuer Client</Label>
+                <Select value={selectedClientId} onValueChange={setSelectedClientId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Client auswählen" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {clients.map((client) => (
+                      <SelectItem key={client.id} value={client.id}>
+                        {client.name} ({client.email})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setEditClientDialogOpen(false)}>
+                Abbrechen
+              </Button>
+              <Button onClick={updateWebhookClient} disabled={isUpdating || !selectedClientId}>
+                {isUpdating ? "Ändere..." : "Client ändern"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </Layout>
   );
