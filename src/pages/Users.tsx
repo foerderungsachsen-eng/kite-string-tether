@@ -241,8 +241,28 @@ const Users = () => {
     setSelectedUser(user);
     setNewPassword("");
     setEmailConfirmed(user.email_confirmed || false);
-    setSkipEmailVerification(user.skip_email_verification || false);
+    setSkipEmailVerification(false); // Will be set after fetching user data
     setIsSettingsDialogOpen(true);
+    
+    // Fetch current skip_email_verification value from database
+    fetchUserSkipEmailVerification(user.user_id);
+  };
+
+  const fetchUserSkipEmailVerification = async (userId: string) => {
+    try {
+      const { data } = await supabase
+        .from('profiles')
+        .select('skip_email_verification')
+        .eq('user_id', userId)
+        .single();
+      
+      if (data) {
+        setSkipEmailVerification(data.skip_email_verification || false);
+      }
+    } catch (error) {
+      console.error('Error fetching skip email verification:', error);
+      setSkipEmailVerification(false);
+    }
   };
 
   const openDeleteUserDialog = (user: UserProfile) => {
@@ -380,18 +400,22 @@ const Users = () => {
     try {
       let hasUpdates = false;
 
-      // Update skip email verification in profiles table
-      if (skipEmailVerification !== (selectedUser.skip_email_verification || false)) {
-        const { error: skipEmailError } = await supabase
-          .from('profiles')
-          .update({ skip_email_verification: skipEmailVerification })
-          .eq('user_id', selectedUser.user_id);
+      // Always try to update skip email verification
+      const { error: skipEmailError } = await supabase
+        .from('profiles')
+        .update({ skip_email_verification: skipEmailVerification })
+        .eq('user_id', selectedUser.user_id);
 
-        if (skipEmailError) {
-          console.error('Error updating skip email verification:', skipEmailError);
-          throw new Error(`Skip Email Verification konnte nicht aktualisiert werden: ${skipEmailError.message}`);
-        }
+      if (skipEmailError) {
+        console.error('Error updating skip email verification:', skipEmailError);
+        toast({
+          title: "Fehler beim Aktualisieren",
+          description: `Skip Email Verification konnte nicht aktualisiert werden: ${skipEmailError.message}`,
+          variant: "destructive"
+        });
+      } else {
         hasUpdates = true;
+        console.log('Skip email verification updated to:', skipEmailVerification);
       }
 
       // Update password if provided
@@ -672,9 +696,6 @@ const Users = () => {
                 </div>
                 <p className="text-xs text-muted-foreground">
                   Aktivieren Sie diese Option, damit sich der Benutzer ohne E-Mail-Bestätigung anmelden kann
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  Aktivieren Sie diese Option, um die E-Mail-Adresse des Benutzers manuell zu bestätigen
                 </p>
               </div>
               <DialogFooter>
