@@ -37,17 +37,30 @@ const Webhooks = () => {
     if (!user) return;
 
     try {
-      let webhooksData;
-      
       if (isAdmin) {
-        // Admins can see all webhooks
-        const { data } = await supabase
+        // Admins can see all webhooks with client information
+        const { data, error } = await supabase
           .from('webhooks')
-          .select('*')
+          .select(`
+            *,
+            clients!inner(
+              name,
+              profiles!inner(email)
+            )
+          `)
           .order('created_at', { ascending: false });
-        webhooksData = data;
+
+        if (error) throw error;
+
+        const formattedWebhooks = (data || []).map(webhook => ({
+          ...webhook,
+          client_name: (webhook.clients as any)?.name,
+          client_email: (webhook.clients as any)?.profiles?.email
+        }));
+
+        setWebhooks(formattedWebhooks);
       } else {
-        // Get client ID first
+        // Regular users see only their assigned webhooks
         const { data: clientData } = await supabase
           .from('clients')
           .select('id')
@@ -59,29 +72,16 @@ const Webhooks = () => {
           return;
         }
 
-        // Get assigned webhooks through webhook_assignments
-        const { data: assignments } = await supabase
-          .from('webhook_assignments')
-          .select('webhook_id')
-          .eq('user_id', user.id)
-          .eq('is_active', true);
-
-        if (!assignments || assignments.length === 0) {
-          setWebhooks([]);
-          return;
-        }
-
-        const webhookIds = assignments.map(a => a.webhook_id);
-        const { data } = await supabase
+        // Get webhooks for this client
+        const { data, error } = await supabase
           .from('webhooks')
           .select('*')
-          .in('id', webhookIds)
+          .eq('client_id', clientData.id)
           .order('created_at', { ascending: false });
           
-        webhooksData = data;
+        if (error) throw error;
+        setWebhooks(data || []);
       }
-
-      setWebhooks(webhooksData || []);
     } catch (error) {
       console.error('Error fetching webhooks:', error);
       toast({
@@ -182,6 +182,17 @@ const Webhooks = () => {
                       <Globe className="h-4 w-4 text-muted-foreground" />
                       <span className="font-mono text-xs break-all">{webhook.target_url}</span>
                     </div>
+                    
+                    {isAdmin && (webhook as any).client_name && (
+                      <div className="flex items-center gap-2 text-sm">
+                        <Badge variant="secondary">
+                          {(webhook as any).client_name}
+                        </Badge>
+                        <span className="text-xs text-muted-foreground">
+                          {(webhook as any).client_email}
+                        </span>
+                      </div>
+                    )}
                     
                     <div className="flex items-center gap-2 text-sm">
                       <Badge variant="outline">{webhook.method}</Badge>

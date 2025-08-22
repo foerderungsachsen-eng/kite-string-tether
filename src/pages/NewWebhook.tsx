@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Layout } from "@/components/Layout";
@@ -14,10 +15,19 @@ import { toast } from "@/hooks/use-toast";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 
+interface Client {
+  id: string;
+  name: string;
+  user_id: string;
+  email?: string;
+}
+
 const NewWebhook = () => {
   const { user, isAdmin } = useAuth();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
+  const [clients, setClients] = useState<Client[]>([]);
+  const [loadingClients, setLoadingClients] = useState(true);
   const [formData, setFormData] = useState({
     name: "",
     target_url: "",
@@ -26,8 +36,15 @@ const NewWebhook = () => {
     is_active: true,
     headers: "{}",
     input_type: "TEXT",
-    output_type: "TEXT"
+    output_type: "TEXT",
+    selected_client_id: ""
   });
+
+  useEffect(() => {
+    if (user && isAdmin) {
+      fetchClients();
+    }
+  }, [user, isAdmin]);
 
   // Redirect non-admin users
   if (!isAdmin) {
@@ -52,9 +69,55 @@ const NewWebhook = () => {
       </Layout>
     );
   }
+
+  const fetchClients = async () => {
+    try {
+      // Get all clients with their profile information
+      const { data: clientsData, error } = await supabase
+        .from('clients')
+        .select(`
+          id,
+          name,
+          user_id,
+          profiles!inner(email)
+        `)
+        .eq('is_active', true)
+        .order('name');
+
+      if (error) throw error;
+
+      const formattedClients = (clientsData || []).map(client => ({
+        id: client.id,
+        name: client.name,
+        user_id: client.user_id,
+        email: (client.profiles as any)?.email
+      }));
+
+      setClients(formattedClients);
+    } catch (error) {
+      console.error('Error fetching clients:', error);
+      toast({
+        title: "Fehler beim Laden der Clients",
+        description: "Die Client-Liste konnte nicht geladen werden.",
+        variant: "destructive",
+      });
+    } finally {
+      setLoadingClients(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
+
+    if (!formData.selected_client_id) {
+      toast({
+        title: "Client erforderlich",
+        description: "Bitte wählen Sie einen Client aus.",
+        variant: "destructive",
+      });
+      return;
+    }
 
     setLoading(true);
     
@@ -77,7 +140,7 @@ const NewWebhook = () => {
       const { error } = await supabase
         .from('webhooks')
         .insert({
-          client_id: clientData.id,
+          client_id: formData.selected_client_id,
           name: formData.name,
           target_url: formData.target_url,
           method: formData.method as "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
@@ -163,6 +226,35 @@ const NewWebhook = () => {
                       </SelectContent>
                     </Select>
                   </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="client">Client zuweisen *</Label>
+                  {loadingClients ? (
+                    <div className="flex items-center space-x-2">
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-primary"></div>
+                      <span className="text-sm text-muted-foreground">Lade Clients...</span>
+                    </div>
+                  ) : (
+                    <Select
+                      value={formData.selected_client_id}
+                      onValueChange={(value) => setFormData({ ...formData, selected_client_id: value })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Client auswählen" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {clients.map((client) => (
+                          <SelectItem key={client.id} value={client.id}>
+                            {client.name} ({client.email})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    Wählen Sie den Client aus, dem dieser Webhook zugewiesen werden soll
+                  </p>
                 </div>
 
                 <div className="space-y-2">
