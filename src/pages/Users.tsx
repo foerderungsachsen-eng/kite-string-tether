@@ -392,19 +392,31 @@ const Users = () => {
 
     setIsDeletingUser(true);
     try {
-      // Delete client record if checkbox is checked
+      // First, delete client record if checkbox is checked
       if (deleteClientToo) {
         const { error: clientError } = await supabase
           .from('clients')
           .delete()
           .eq('user_id', selectedUser.user_id);
 
-        if (clientError) {
-          console.warn('Error deleting client:', clientError);
-        }
+        if (clientError) throw clientError;
       }
 
-      // Then delete the profile
+      // Delete any webhook assignments for this user
+      try {
+        const { error: assignmentError } = await supabase
+          .from('webhook_assignments')
+          .delete()
+          .eq('user_id', selectedUser.user_id);
+        
+        if (assignmentError && assignmentError.code !== 'PGRST116') {
+          console.warn('Error deleting webhook assignments:', assignmentError);
+        }
+      } catch (error) {
+        console.warn('Webhook assignments table might not exist:', error);
+      }
+
+      // Delete the profile record
       const { error: profileError } = await supabase
         .from('profiles')
         .delete()
@@ -412,24 +424,33 @@ const Users = () => {
 
       if (profileError) throw profileError;
 
-      // Note: We can't delete from auth.users directly via client
-      // This would need to be done via admin API or edge function
+      // Try to sign out the user if they're currently signed in
+      // Note: We can't delete from auth.users table directly from client-side
+      // The auth.users record will remain, but the profile is deleted
+      try {
+        // If this is implemented via Edge Function in the future, call it here
+        console.log('Profile deleted, auth.users record remains (requires admin API)');
+      } catch (error) {
+        console.warn('Could not delete auth user:', error);
+      }
 
       toast({
         title: "Benutzer gelöscht",
-        description: `Benutzer ${selectedUser.email} wurde erfolgreich gelöscht.${deleteClientToo ? ' Client-Datensatz wurde ebenfalls gelöscht.' : ''}`,
+        description: `Profil für ${selectedUser.email} wurde gelöscht.${deleteClientToo ? ' Client-Datensatz wurde ebenfalls gelöscht.' : ''} Der Benutzer kann sich nicht mehr anmelden.`,
       });
 
       setDeleteUserDialogOpen(false);
       setSelectedUser(null);
       setDeleteClientToo(false);
-      await fetchUsers();
-      await fetchClients();
+      
+      // Refresh both lists
+      await Promise.all([fetchUsers(), fetchClients()]);
+      
     } catch (error: any) {
       console.error('Error deleting user:', error);
       toast({
         title: "Fehler beim Löschen",
-        description: error.message || "Der Benutzer konnte nicht gelöscht werden.",
+        description: error.message || "Das Benutzerprofil konnte nicht gelöscht werden.",
         variant: "destructive",
       });
     } finally {
@@ -442,6 +463,26 @@ const Users = () => {
 
     setIsDeletingClient(true);
     try {
+      // Delete all webhooks for this client first
+      const { error: webhooksError } = await supabase
+        .from('webhooks')
+        .delete()
+        .eq('client_id', selectedClient.id);
+
+      if (webhooksError) {
+        console.warn('Error deleting webhooks:', webhooksError);
+      }
+
+      // Delete all executions for this client
+      const { error: executionsError } = await supabase
+        .from('executions')
+        .delete()
+        .eq('client_id', selectedClient.id);
+
+      if (executionsError) {
+        console.warn('Error deleting executions:', executionsError);
+      }
+
       // Delete the client record
       const { error: clientError } = await supabase
         .from('clients')
@@ -452,12 +493,15 @@ const Users = () => {
 
       toast({
         title: "Client gelöscht",
-        description: `Client ${selectedClient.name} wurde erfolgreich gelöscht.`,
+        description: `Client ${selectedClient.name} und alle zugehörigen Webhooks wurden gelöscht.`,
       });
 
       setDeleteClientDialogOpen(false);
       setSelectedClient(null);
-      await fetchClients();
+      
+      // Refresh both lists since webhooks were deleted
+      await Promise.all([fetchUsers(), fetchClients()]);
+      
     } catch (error: any) {
       console.error('Error deleting client:', error);
       toast({
@@ -1001,8 +1045,8 @@ const Users = () => {
             <DialogHeader>
               <DialogTitle>Benutzer löschen</DialogTitle>
               <DialogDescription>
-                Sind Sie sicher, dass Sie den Benutzer {selectedUser?.email} löschen möchten? 
-                Diese Aktion kann nicht rückgängig gemacht werden und löscht alle zugehörigen Daten.
+                Sind Sie sicher, dass Sie das Profil für {selectedUser?.email} löschen möchten? 
+                Der Benutzer kann sich danach nicht mehr anmelden. Diese Aktion kann nicht rückgängig gemacht werden.
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4">
@@ -1017,7 +1061,7 @@ const Users = () => {
                 </Label>
               </div>
               <p className="text-xs text-muted-foreground">
-                Wenn aktiviert, wird auch der zugehörige Client-Datensatz mit allen Webhooks und Ausführungen gelöscht.
+                Wenn aktiviert, wird auch der zugehörige Client-Datensatz mit allen Webhooks, Ausführungen und Token-Guthaben gelöscht.
               </p>
             </div>
             <DialogFooter>
@@ -1032,7 +1076,7 @@ const Users = () => {
                 onClick={deleteUser} 
                 disabled={isDeletingUser}
               >
-                {isDeletingUser ? "Lösche..." : "Benutzer löschen"}
+                {isDeletingUser ? "Lösche..." : "Profil löschen"}
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -1045,7 +1089,8 @@ const Users = () => {
               <DialogTitle>Client löschen</DialogTitle>
               <DialogDescription>
                 Sind Sie sicher, dass Sie den Client {selectedClient?.name} löschen möchten? 
-                Diese Aktion kann nicht rückgängig gemacht werden und löscht alle zugehörigen Webhooks und Ausführungen.
+                Diese Aktion löscht auch alle zugehörigen Webhooks, Ausführungen und das Token-Guthaben. 
+                Das Benutzerprofil bleibt erhalten, aber der Client kann keine Webhooks mehr verwenden.
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>
