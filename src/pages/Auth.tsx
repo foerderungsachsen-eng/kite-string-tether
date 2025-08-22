@@ -58,6 +58,109 @@ const Auth = () => {
   const handleSignUp = async (email: string, password: string) => {
     setLoading(true);
     
+    try {
+      // First, try to sign up the user
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          emailRedirectTo: `${window.location.origin}/`,
+          data: {
+            email_confirm: false
+          }
+        }
+      });
+      
+      if (error) {
+        // If user already exists in auth but not in profiles, we need to handle this case
+        if (error.message.includes('User already registered')) {
+          // Try to sign in the user first to get their ID
+          const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+            email,
+            password
+          });
+          
+          if (signInError) {
+            toast({
+              title: "Konto existiert bereits",
+              description: "Dieses Konto existiert bereits. Bitte melden Sie sich an oder verwenden Sie eine andere E-Mail-Adresse.",
+              variant: "destructive",
+            });
+            setLoading(false);
+            return;
+          }
+          
+          // User signed in successfully, now create missing profile and client records
+          if (signInData.user) {
+            await createUserRecords(signInData.user.id, email);
+            toast({
+              title: "Konto wiederhergestellt",
+              description: "Ihr Konto wurde erfolgreich wiederhergestellt. Sie sind jetzt angemeldet.",
+            });
+          }
+        } else {
+          toast({
+            title: "Registrierung fehlgeschlagen",
+            description: error.message,
+            variant: "destructive",
+          });
+        }
+        setLoading(false);
+        return;
+      }
+      
+      if (data.user) {
+        await createUserRecords(data.user.id, email);
+        toast({
+          title: "Registrierung erfolgreich",
+          description: "Konto wurde erfolgreich erstellt. Sie können sich jetzt anmelden.",
+        });
+      }
+    } catch (error: any) {
+      console.error('Registration error:', error);
+      toast({
+        title: "Registrierung fehlgeschlagen",
+        description: error.message || "Ein unerwarteter Fehler ist aufgetreten.",
+        variant: "destructive",
+      });
+    }
+    
+    setLoading(false);
+  };
+  
+  const createUserRecords = async (userId: string, email: string) => {
+    // Create profile for the user
+    const { error: profileError } = await supabase
+      .from('profiles')
+      .insert({
+        user_id: userId,
+        email: email,
+        role: 'CLIENT'
+      });
+
+    if (profileError) {
+      console.error('Error creating profile:', profileError);
+      throw new Error('Profil konnte nicht erstellt werden: ' + profileError.message);
+    }
+
+    // Also create client record
+    const { error: clientError } = await supabase
+      .from('clients')
+      .insert({
+        user_id: userId,
+        name: email.split('@')[0], // Use email prefix as name
+        tokens_balance: 100 // Give new users 100 tokens
+      });
+
+    if (clientError) {
+      console.error('Error creating client:', clientError);
+      throw new Error('Client-Datensatz konnte nicht erstellt werden: ' + clientError.message);
+    }
+  };
+
+  const handleSignUp_OLD = async (email: string, password: string) => {
+    setLoading(true);
+    
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
