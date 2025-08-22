@@ -57,13 +57,15 @@ const Auth = () => {
 
   const handleSignUp = async (email: string, password: string) => {
     setLoading(true);
-    const redirectUrl = `${window.location.origin}/`;
     
     const { error } = await supabase.auth.signUp({
       email,
       password,
       options: {
-        emailRedirectTo: redirectUrl
+        emailRedirectTo: `${window.location.origin}/`,
+        data: {
+          email_confirm: false
+        }
       }
     });
     
@@ -76,7 +78,7 @@ const Auth = () => {
     } else {
       toast({
         title: "Registrierung erfolgreich",
-        description: "Bitte überprüfen Sie Ihre E-Mail für die Bestätigung.",
+        description: "Konto wurde erfolgreich erstellt. Sie können sich jetzt anmelden.",
       });
     }
     setLoading(false);
