@@ -250,6 +250,7 @@ const Users = () => {
 
   const fetchUserSkipEmailVerification = async (userId: string) => {
     try {
+      // First check if the column exists by trying to select it
       const { data } = await supabase
         .from('profiles')
         .select('skip_email_verification')
@@ -258,9 +259,11 @@ const Users = () => {
       
       if (data) {
         setSkipEmailVerification(data.skip_email_verification);
+      } else {
+        setSkipEmailVerification(false);
       }
     } catch (error) {
-      console.error('Error fetching skip email verification:', error);
+      console.error('Column skip_email_verification does not exist yet:', error);
       setSkipEmailVerification(false);
     }
   };
@@ -398,15 +401,32 @@ const Users = () => {
 
     setIsUpdatingSettings(true);
     try {
-      // Update skip_email_verification in the database
-      const { error: skipEmailError } = await supabase
-        .from('profiles')
-        .update({ skip_email_verification: skipEmailVerification })
-        .eq('user_id', selectedUser.user_id);
+      // Try to update skip_email_verification, but handle if column doesn't exist
+      try {
+        const { error: skipEmailError } = await supabase
+          .from('profiles')
+          .update({ skip_email_verification: skipEmailVerification })
+          .eq('user_id', selectedUser.user_id);
 
-      if (skipEmailError) {
-        console.error('Error updating skip_email_verification:', skipEmailError);
-        throw new Error(`Skip Email Verification konnte nicht aktualisiert werden: ${skipEmailError.message}`);
+        if (skipEmailError) {
+          if (skipEmailError.code === '42703' || skipEmailError.code === 'PGRST204') {
+            throw new Error('Die skip_email_verification Spalte existiert noch nicht in der Datenbank. Bitte warten Sie, bis die Migration ausgeführt wurde.');
+          }
+          throw new Error(`Skip Email Verification konnte nicht aktualisiert werden: ${skipEmailError.message}`);
+        }
+        
+        toast({
+          title: "Einstellungen aktualisiert",
+          description: `Skip Email Verification wurde ${skipEmailVerification ? 'aktiviert' : 'deaktiviert'}.`
+        });
+      } catch (columnError: any) {
+        console.error('Column does not exist:', columnError);
+        toast({
+          title: "Spalte nicht gefunden",
+          description: "Die skip_email_verification Spalte existiert noch nicht. Migration wird ausgeführt...",
+          variant: "destructive"
+        });
+        throw columnError;
       }
 
       // Update password if provided
@@ -420,11 +440,6 @@ const Users = () => {
         console.log('Email confirmation update requested but requires admin API');
       }
 
-      toast({
-        title: "Einstellungen aktualisiert",
-        description: `Skip Email Verification wurde ${skipEmailVerification ? 'aktiviert' : 'deaktiviert'}.`
-      });
-      
       await fetchUsers(); // Refresh user list
 
       setIsSettingsDialogOpen(false);
@@ -653,11 +668,12 @@ const Users = () => {
                     onCheckedChange={(checked) => setSkipEmailVerification(checked as boolean)}
                   />
                   <Label htmlFor="skip-email-verification" className="text-sm">
-                    Skip E-Mail Verification
+                    Skip E-Mail Verification (Beta)
                   </Label>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Wenn aktiviert, kann sich der Benutzer ohne E-Mail-Bestätigung anmelden
+                  Wenn aktiviert, kann sich der Benutzer ohne E-Mail-Bestätigung anmelden. 
+                  (Erfordert Datenbank-Migration)
                 </p>
               </div>
               <DialogFooter>
