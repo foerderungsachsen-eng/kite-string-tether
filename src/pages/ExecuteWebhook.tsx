@@ -143,38 +143,45 @@ const ExecuteWebhook = () => {
 
       if (!clientData) throw new Error('Client data not found');
 
-      let payload: any = {};
       let fileKey: string | null = null;
+      let requestBody: any;
+      let contentType: string;
 
       if (inputType === 'TEXT') {
-        payload = { text: textInput };
+        requestBody = JSON.stringify({ text: textInput });
+        contentType = 'application/json';
       } else if (inputType === 'FILE' && fileInput) {
-        // For file uploads, we would typically upload to storage first
-        // For now, we'll send file info in the payload
-        payload = { 
-          fileName: fileInput.name,
-          fileSize: fileInput.size,
-          fileType: fileInput.type
-        };
+        // Create FormData to send the actual file
+        const formData = new FormData();
+        formData.append('file', fileInput);
+        formData.append('fileName', fileInput.name);
+        formData.append('fileSize', fileInput.size.toString());
+        formData.append('fileType', fileInput.type);
+        
+        requestBody = formData;
+        contentType = 'multipart/form-data';
         fileKey = `${Date.now()}-${fileInput.name}`;
       }
 
       const startTime = Date.now();
 
       // Prepare headers
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        ...webhook.headers
-      };
+      const headers: Record<string, string> = { ...webhook.headers };
 
       // Remove internal metadata from headers before sending
       const { input_type, output_type, ...cleanHeaders } = headers;
+
+      // Set Content-Type only for JSON requests (FormData sets its own Content-Type with boundary)
+      if (inputType === 'TEXT') {
+        cleanHeaders['Content-Type'] = 'application/json';
+      }
+      // For FormData, don't set Content-Type - let the browser set it with boundary
 
       // Make the actual HTTP request to the webhook
       const response = await fetch(webhook.target_url, {
         method: webhook.method,
         headers: cleanHeaders,
-        body: JSON.stringify(payload)
+        body: requestBody
       });
 
       const duration = Date.now() - startTime;
@@ -187,6 +194,18 @@ const ExecuteWebhook = () => {
         responseData = responseText;
       }
 
+      // Prepare payload for database storage
+      let payloadForDb: any;
+      if (inputType === 'TEXT') {
+        payloadForDb = { text: textInput };
+      } else {
+        payloadForDb = { 
+          fileName: fileInput?.name,
+          fileSize: fileInput?.size,
+          fileType: fileInput?.type
+        };
+      }
+
       // Record the execution in the database
       const { error: executionError } = await supabase
         .from('executions')
@@ -194,7 +213,7 @@ const ExecuteWebhook = () => {
           client_id: clientData.id,
           webhook_id: webhook.id,
           request_type: inputType,
-          payload: JSON.stringify(payload),
+          payload: JSON.stringify(payloadForDb),
           file_key: fileKey,
           status: response.ok ? 'SUCCESS' : 'ERROR',
           status_code: response.status,
