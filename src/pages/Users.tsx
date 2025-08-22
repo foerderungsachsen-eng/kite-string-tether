@@ -398,9 +398,7 @@ const Users = () => {
 
     setIsUpdatingSettings(true);
     try {
-      let hasUpdates = false;
-
-      // Always try to update skip email verification
+      // Update skip email verification
       const { error: skipEmailError } = await supabase
         .from('profiles')
         .update({ skip_email_verification: skipEmailVerification })
@@ -413,57 +411,29 @@ const Users = () => {
           description: `Skip Email Verification konnte nicht aktualisiert werden: ${skipEmailError.message}`,
           variant: "destructive"
         });
-      } else {
-        hasUpdates = true;
-        console.log('Skip email verification updated to:', skipEmailVerification);
+        return;
       }
 
       // Update password if provided
       if (newPassword.trim()) {
-        const { error: passwordError } = await supabase.auth.admin.updateUserById(
-          selectedUser.user_id,
-          { password: newPassword }
-        );
-
-        if (passwordError) {
-          // If admin API fails, try regular password update
-          console.warn('Admin password update failed, trying regular update:', passwordError);
-          
-          // Note: This would require the user to be signed in, which they're not
-          // For now, we'll show an error message
-          throw new Error('Passwort-Update erfordert erweiterte Berechtigungen');
-        }
-        hasUpdates = true;
+        // For now, show a message that password update is not available
+        toast({
+          title: "Passwort-Update nicht verfügbar",
+          description: "Passwort-Updates sind derzeit nicht verfügbar. Andere Einstellungen wurden gespeichert.",
+          variant: "destructive"
+        });
       }
 
       // Update email confirmation status
-      if (emailConfirmed !== (selectedUser.email_confirmed || false)) {
-        const { error: confirmError } = await supabase.auth.admin.updateUserById(
-          selectedUser.user_id,
-          { email_confirm: emailConfirmed }
-        );
+      // Email confirmation update is not available via client-side API
+      // This would need to be done via admin API or edge function
 
-        if (confirmError) {
-          console.warn('Email confirmation update failed:', confirmError);
-          // For now, we'll continue without this update
-        } else {
-          hasUpdates = true;
-        }
-      }
-
-      if (hasUpdates) {
-        toast({
-          title: "Einstellungen aktualisiert",
-          description: "Benutzereinstellungen wurden erfolgreich aktualisiert."
-        });
-        
-        await fetchUsers(); // Refresh user list
-      } else {
-        toast({
-          title: "Keine Änderungen",
-          description: "Es wurden keine Änderungen vorgenommen."
-        });
-      }
+      toast({
+        title: "Einstellungen aktualisiert",
+        description: "Skip Email Verification wurde erfolgreich aktualisiert."
+      });
+      
+      await fetchUsers(); // Refresh user list
 
       setIsSettingsDialogOpen(false);
       setSelectedUser(null);
