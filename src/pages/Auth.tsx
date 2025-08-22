@@ -58,7 +58,7 @@ const Auth = () => {
   const handleSignUp = async (email: string, password: string) => {
     setLoading(true);
     
-    const { error } = await supabase.auth.signUp({
+    const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
@@ -75,7 +75,38 @@ const Auth = () => {
         description: error.message,
         variant: "destructive",
       });
-    } else {
+    } else if (data.user) {
+      // Create profile for the new user
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .insert({
+          user_id: data.user.id,
+          email: email,
+          role: 'CLIENT'
+        });
+
+      if (profileError) {
+        console.error('Error creating profile:', profileError);
+        toast({
+          title: "Profil-Erstellung fehlgeschlagen",
+          description: "Konto wurde erstellt, aber Profil konnte nicht angelegt werden.",
+          variant: "destructive",
+        });
+      } else {
+        // Also create client record
+        const { error: clientError } = await supabase
+          .from('clients')
+          .insert({
+            user_id: data.user.id,
+            name: email.split('@')[0], // Use email prefix as name
+            tokens_balance: 100 // Give new users 100 tokens
+          });
+
+        if (clientError) {
+          console.error('Error creating client:', clientError);
+        }
+      }
+      
       toast({
         title: "Registrierung erfolgreich",
         description: "Konto wurde erfolgreich erstellt. Sie können sich jetzt anmelden.",
