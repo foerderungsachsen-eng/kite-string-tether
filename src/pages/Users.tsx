@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Mail, Calendar, Shield, User, Globe, Users as UsersIcon, Settings } from "lucide-react";
+import { Plus, Mail, Calendar, Shield, User, Globe, Users as UsersIcon, Settings, Trash2, Coins } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useNavigate } from "react-router-dom";
 
@@ -49,6 +49,11 @@ const Users = () => {
   const [isUpdatingSettings, setIsUpdatingSettings] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [emailConfirmed, setEmailConfirmed] = useState(false);
+  const [deleteUserDialogOpen, setDeleteUserDialogOpen] = useState(false);
+  const [tokenDialogOpen, setTokenDialogOpen] = useState(false);
+  const [newTokenBalance, setNewTokenBalance] = useState("");
+  const [isDeletingUser, setIsDeletingUser] = useState(false);
+  const [isUpdatingTokens, setIsUpdatingTokens] = useState(false);
 
   useEffect(() => {
     if (user && isAdmin) {
@@ -236,6 +241,124 @@ const Users = () => {
     setNewPassword("");
     setEmailConfirmed(user.email_confirmed || false);
     setIsSettingsDialogOpen(true);
+  };
+
+  const openDeleteUserDialog = (user: UserProfile) => {
+    setSelectedUser(user);
+    setDeleteUserDialogOpen(true);
+  };
+
+  const openTokenDialog = (user: UserProfile) => {
+    setSelectedUser(user);
+    // Get current token balance
+    fetchUserTokenBalance(user.user_id);
+    setTokenDialogOpen(true);
+  };
+
+  const fetchUserTokenBalance = async (userId: string) => {
+    try {
+      const { data } = await supabase
+        .from('clients')
+        .select('tokens_balance')
+        .eq('user_id', userId)
+        .single();
+      
+      if (data) {
+        setNewTokenBalance(data.tokens_balance.toString());
+      }
+    } catch (error) {
+      console.error('Error fetching token balance:', error);
+      setNewTokenBalance("0");
+    }
+  };
+
+  const deleteUser = async () => {
+    if (!selectedUser) return;
+
+    setIsDeletingUser(true);
+    try {
+      // First delete the client record
+      const { error: clientError } = await supabase
+        .from('clients')
+        .delete()
+        .eq('user_id', selectedUser.user_id);
+
+      if (clientError) {
+        console.warn('Error deleting client:', clientError);
+      }
+
+      // Then delete the profile
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .delete()
+        .eq('user_id', selectedUser.user_id);
+
+      if (profileError) throw profileError;
+
+      // Note: We can't delete from auth.users directly via client
+      // This would need to be done via admin API or edge function
+
+      toast({
+        title: "Benutzer gelöscht",
+        description: `Benutzer ${selectedUser.email} wurde erfolgreich gelöscht.`,
+      });
+
+      setDeleteUserDialogOpen(false);
+      setSelectedUser(null);
+      await fetchUsers();
+    } catch (error: any) {
+      console.error('Error deleting user:', error);
+      toast({
+        title: "Fehler beim Löschen",
+        description: error.message || "Der Benutzer konnte nicht gelöscht werden.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsDeletingUser(false);
+    }
+  };
+
+  const updateTokenBalance = async () => {
+    if (!selectedUser || !newTokenBalance.trim()) return;
+
+    const tokenAmount = parseInt(newTokenBalance);
+    if (isNaN(tokenAmount) || tokenAmount < 0) {
+      toast({
+        title: "Ungültige Eingabe",
+        description: "Bitte geben Sie eine gültige Anzahl von Tokens ein.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsUpdatingTokens(true);
+    try {
+      const { error } = await supabase
+        .from('clients')
+        .update({ tokens_balance: tokenAmount })
+        .eq('user_id', selectedUser.user_id);
+
+      if (error) throw error;
+
+      toast({
+        title: "Token-Guthaben aktualisiert",
+        description: `Token-Guthaben für ${selectedUser.email} wurde auf ${tokenAmount} gesetzt.`,
+      });
+
+      setTokenDialogOpen(false);
+      setSelectedUser(null);
+      setNewTokenBalance("");
+      await fetchUsers();
+    } catch (error: any) {
+      console.error('Error updating token balance:', error);
+      toast({
+        title: "Fehler beim Aktualisieren",
+        description: error.message || "Das Token-Guthaben konnte nicht aktualisiert werden.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsUpdatingTokens(false);
+    }
   };
 
   const updateUserSettings = async () => {
@@ -530,6 +653,76 @@ const Users = () => {
               </DialogFooter>
             </DialogContent>
           </Dialog>
+
+          {/* Delete User Dialog */}
+          <Dialog open={deleteUserDialogOpen} onOpenChange={setDeleteUserDialogOpen}>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>Benutzer löschen</DialogTitle>
+                <DialogDescription>
+                  Sind Sie sicher, dass Sie den Benutzer {selectedUser?.email} löschen möchten? 
+                  Diese Aktion kann nicht rückgängig gemacht werden und löscht alle zugehörigen Daten.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button 
+                  variant="outline" 
+                  onClick={() => setDeleteUserDialogOpen(false)}
+                >
+                  Abbrechen
+                </Button>
+                <Button 
+                  variant="destructive"
+                  onClick={deleteUser} 
+                  disabled={isDeletingUser}
+                >
+                  {isDeletingUser ? "Lösche..." : "Benutzer löschen"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          {/* Token Balance Dialog */}
+          <Dialog open={tokenDialogOpen} onOpenChange={setTokenDialogOpen}>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>Token-Guthaben verwalten</DialogTitle>
+                <DialogDescription>
+                  Token-Guthaben für {selectedUser?.email} ändern
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="token-balance">Neues Token-Guthaben</Label>
+                  <Input
+                    id="token-balance"
+                    type="number"
+                    min="0"
+                    value={newTokenBalance}
+                    onChange={(e) => setNewTokenBalance(e.target.value)}
+                    placeholder="Anzahl Tokens"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Geben Sie die neue Anzahl von Tokens für diesen Benutzer ein
+                  </p>
+                </div>
+              </div>
+              <DialogFooter>
+                <Button 
+                  variant="outline" 
+                  onClick={() => setTokenDialogOpen(false)}
+                >
+                  Abbrechen
+                </Button>
+                <Button 
+                  onClick={updateTokenBalance} 
+                  disabled={isUpdatingTokens || !newTokenBalance.trim()}
+                >
+                  {isUpdatingTokens ? "Speichere..." : "Token-Guthaben setzen"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </div>
 
         {users.length === 0 ? (
@@ -588,10 +781,11 @@ const Users = () => {
                     <div className="flex gap-2 pt-2 flex-wrap">
                       <Button 
                         size="sm" 
-                        onClick={() => openAssignDialog(userProfile)}
+                        variant="outline"
+                        onClick={() => openTokenDialog(userProfile)}
                       >
-                        <Globe className="h-4 w-4 mr-2" />
-                        Webhooks ({userProfile.webhooks_count || 0})
+                        <Coins className="h-4 w-4 mr-2" />
+                        Tokens
                       </Button>
                       <Button 
                         size="sm" 
@@ -600,6 +794,14 @@ const Users = () => {
                       >
                         <Settings className="h-4 w-4 mr-2" />
                         Einstellungen
+                      </Button>
+                      <Button 
+                        size="sm" 
+                        variant="destructive"
+                        onClick={() => openDeleteUserDialog(userProfile)}
+                      >
+                        <Trash2 className="h-4 w-4 mr-2" />
+                        Löschen
                       </Button>
                       {userProfile.role === 'CLIENT' && (
                         <Button 
