@@ -7,6 +7,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Index from "./pages/Index";
 import Auth from "./pages/Auth";
 import Webhooks from "./pages/Webhooks";
+import Users from "./pages/Users";
 import NewWebhook from "./pages/NewWebhook";
 import WebhookAssignments from "./pages/WebhookAssignments";
 import ExecuteWebhook from "./pages/ExecuteWebhook";
@@ -35,6 +36,7 @@ const App: React.FC = () => {
             <Route path="/" element={<Index />} />
             <Route path="/auth" element={<Auth />} />
             <Route path="/webhooks" element={<Webhooks />} />
+            <Route path="/users" element={<Users />} />
             <Route path="/webhooks/new" element={<NewWebhook />} />
             <Route path="/webhooks/:webhookId/assignments" element={<WebhookAssignments />} />
             <Route path="/execute/:webhookId" element={<ExecuteWebhook />} />

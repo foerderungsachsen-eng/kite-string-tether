@@ -10,11 +10,12 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { Home, Globe, History, Settings } from "lucide-react";
+import { Home, Globe, History, Settings, Users } from "lucide-react";
 
 const items = [
   { title: "Dashboard", url: "/", icon: Home },
   { title: "Webhooks", url: "/webhooks", icon: Globe },
+  { title: "Benutzer", url: "/users", icon: Users },
   { title: "Historie", url: "/history", icon: History },
   { title: "Einstellungen", url: "/settings", icon: Settings },
 ];
