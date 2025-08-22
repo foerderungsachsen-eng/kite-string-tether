@@ -5,12 +5,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { toast } from "@/hooks/use-toast";
 import { User, Session } from '@supabase/supabase-js';
 
 const Auth = () => {
   const [loading, setLoading] = useState(false);
+  const [forgotPasswordLoading, setForgotPasswordLoading] = useState(false);
+  const [forgotPasswordOpen, setForgotPasswordOpen] = useState(false);
+  const [resetEmail, setResetEmail] = useState("");
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const navigate = useNavigate();
@@ -55,206 +58,40 @@ const Auth = () => {
     setLoading(false);
   };
 
-  const handleSignUp = async (email: string, password: string) => {
-    setLoading(true);
-    
-    try {
-      // Check if user already exists by trying to sign in first
-      const { data: existingUser, error: signInError } = await supabase.auth.signInWithPassword({
-        email,
-        password
-      });
-      
-      if (existingUser.user && !signInError) {
-        // User exists and can sign in, check if profile exists
-        const { data: profileData } = await supabase
-          .from('profiles')
-          .select('id')
-          .eq('user_id', existingUser.user.id)
-          .single();
-        
-        if (!profileData) {
-          // Profile doesn't exist, create it
-          try {
-            await createUserRecords(existingUser.user.id, email);
-            toast({
-              title: "Konto wiederhergestellt",
-              description: "Ihr Konto wurde erfolgreich wiederhergestellt. Sie sind jetzt angemeldet.",
-            });
-          } catch (error: any) {
-            toast({
-              title: "Fehler beim Wiederherstellen",
-              description: "Konto existiert, aber Profil konnte nicht erstellt werden.",
-              variant: "destructive",
-            });
-          }
-        } else {
-          toast({
-            title: "Konto existiert bereits",
-            description: "Sie sind bereits angemeldet.",
-          });
-        }
-        setLoading(false);
-        return;
-      }
-      
-      // User doesn't exist, create new account
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          emailRedirectTo: `${window.location.origin}/`,
-          data: {
-            email_confirm: false
-          }
-        }
-      });
-      
-      if (error) {
-        console.error('SignUp error:', error);
-        toast({
-          title: "Registrierung fehlgeschlagen",
-          description: error.message,
-          variant: "destructive",
-        });
-        setLoading(false);
-        return;
-      }
-      
-      if (data.user) {
-        // Wait a moment for the user to be fully created
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        
-        // Create profile and client records using the signup user data
-        try {
-          await createUserRecords(data.user.id, email);
-          toast({
-            title: "Registrierung erfolgreich",
-            description: "Konto wurde erfolgreich erstellt. Sie können sich jetzt anmelden.",
-          });
-        } catch (error: any) {
-          console.error('Error creating user records:', error);
-          toast({
-            title: "Registrierung erfolgreich",
-            description: "Konto wurde erstellt. Sie können sich jetzt anmelden.",
-            variant: "destructive",
-          });
-        }
-      } else {
-        toast({
-          title: "Registrierung erfolgreich",
-          description: "Konto wurde erstellt. Bitte melden Sie sich an.",
-        });
-      }
-    } catch (error: any) {
-      console.error('Registration error:', error);
+  const handleForgotPassword = async () => {
+    if (!resetEmail.trim()) {
       toast({
-        title: "Registrierung fehlgeschlagen",
-        description: error.message || "Ein unerwarteter Fehler ist aufgetreten.",
+        title: "E-Mail erforderlich",
+        description: "Bitte geben Sie Ihre E-Mail-Adresse ein.",
         variant: "destructive",
       });
+      return;
     }
-    
-    setLoading(false);
-  };
-  
-  const createUserRecords = async (userId: string, email: string) => {
-    console.log('Creating user records for:', userId, email);
-    
+
+    setForgotPasswordLoading(true);
     try {
-      // Create profile record
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .insert({
-          user_id: userId,
-          email: email,
-          role: 'CLIENT'
-        });
+      const { error } = await supabase.auth.resetPasswordForEmail(resetEmail, {
+        redirectTo: `${window.location.origin}/auth`,
+      });
 
-      if (profileError) {
-        console.error('Error creating profile:', profileError);
-        throw new Error(`Profil konnte nicht erstellt werden: ${profileError.message}`);
-      }
+      if (error) throw error;
 
-      // Also create client record
-      const { error: clientError } = await supabase
-        .from('clients')
-        .insert({
-          user_id: userId,
-          name: email.split('@')[0], // Use email prefix as name
-          tokens_balance: 100 // Give new users 100 tokens
-        });
-
-      if (clientError) {
-        console.error('Error creating client:', clientError);
-        throw new Error(`Client-Datensatz konnte nicht erstellt werden: ${clientError.message}`);
-      }
-    } catch (error: any) {
-      console.error('Error in createUserRecords:', error);
-      throw error;
-    }
-  };
-
-  const handleSignUp_OLD = async (email: string, password: string) => {
-    setLoading(true);
-    
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        emailRedirectTo: `${window.location.origin}/`,
-        data: {
-          email_confirm: false
-        }
-      }
-    });
-    
-    if (error) {
       toast({
-        title: "Registrierung fehlgeschlagen",
+        title: "E-Mail gesendet",
+        description: "Wir haben Ihnen eine E-Mail mit einem Link zum Zurücksetzen des Passworts gesendet.",
+      });
+
+      setForgotPasswordOpen(false);
+      setResetEmail("");
+    } catch (error: any) {
+      toast({
+        title: "Fehler",
         description: error.message,
         variant: "destructive",
       });
-    } else if (data.user) {
-      // Create profile for the new user
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .insert({
-          user_id: data.user.id,
-          email: email,
-          role: 'CLIENT'
-        });
-
-      if (profileError) {
-        console.error('Error creating profile:', profileError);
-        toast({
-          title: "Profil-Erstellung fehlgeschlagen",
-          description: "Konto wurde erstellt, aber Profil konnte nicht angelegt werden.",
-          variant: "destructive",
-        });
-      } else {
-        // Also create client record
-        const { error: clientError } = await supabase
-          .from('clients')
-          .insert({
-            user_id: data.user.id,
-            name: email.split('@')[0], // Use email prefix as name
-            tokens_balance: 100 // Give new users 100 tokens
-          });
-
-        if (clientError) {
-          console.error('Error creating client:', clientError);
-        }
-      }
-      
-      console.log('User records created successfully');
-      
-      toast({
-        title: "Registrierung erfolgreich",
-        description: "Konto wurde erfolgreich erstellt. Sie können sich jetzt anmelden.",
-      });
+    } finally {
+      setForgotPasswordLoading(false);
     }
-    setLoading(false);
   };
 
   return (
@@ -262,23 +99,54 @@ const Auth = () => {
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
           <CardTitle className="text-2xl font-bold">Webhook Dashboard</CardTitle>
-          <CardDescription>Melden Sie sich an oder erstellen Sie ein Konto</CardDescription>
+          <CardDescription>Melden Sie sich mit Ihrem Konto an</CardDescription>
         </CardHeader>
         <CardContent>
-          <Tabs defaultValue="signin" className="w-full">
-            <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="signin">Anmelden</TabsTrigger>
-              <TabsTrigger value="signup">Registrieren</TabsTrigger>
-            </TabsList>
+          <div className="space-y-4">
+            <AuthForm onSubmit={handleSignIn} loading={loading} />
             
-            <TabsContent value="signin">
-              <AuthForm onSubmit={handleSignIn} loading={loading} type="signin" />
-            </TabsContent>
+            <div className="text-center">
+              <Dialog open={forgotPasswordOpen} onOpenChange={setForgotPasswordOpen}>
+                <DialogTrigger asChild>
+                  <Button variant="link" className="text-sm">
+                    Passwort vergessen?
+                  </Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Passwort zurücksetzen</DialogTitle>
+                    <DialogDescription>
+                      Geben Sie Ihre E-Mail-Adresse ein und wir senden Ihnen einen Link zum Zurücksetzen Ihres Passworts.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="reset-email">E-Mail-Adresse</Label>
+                      <Input
+                        id="reset-email"
+                        type="email"
+                        value={resetEmail}
+                        onChange={(e) => setResetEmail(e.target.value)}
+                        placeholder="name@example.com"
+                      />
+                    </div>
+                  </div>
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setForgotPasswordOpen(false)}>
+                      Abbrechen
+                    </Button>
+                    <Button onClick={handleForgotPassword} disabled={forgotPasswordLoading}>
+                      {forgotPasswordLoading ? "Sende..." : "Link senden"}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            </div>
             
-            <TabsContent value="signup">
-              <AuthForm onSubmit={handleSignUp} loading={loading} type="signup" />
-            </TabsContent>
-          </Tabs>
+            <div className="text-center text-sm text-muted-foreground">
+              Kein Konto? Kontaktieren Sie Ihren Administrator.
+            </div>
+          </div>
         </CardContent>
       </Card>
     </div>
@@ -288,10 +156,9 @@ const Auth = () => {
 interface AuthFormProps {
   onSubmit: (email: string, password: string) => void;
   loading: boolean;
-  type: "signin" | "signup";
 }
 
-const AuthForm = ({ onSubmit, loading, type }: AuthFormProps) => {
+const AuthForm = ({ onSubmit, loading }: AuthFormProps) => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
@@ -327,7 +194,7 @@ const AuthForm = ({ onSubmit, loading, type }: AuthFormProps) => {
       </div>
       
       <Button type="submit" className="w-full" disabled={loading}>
-        {loading ? "Lädt..." : type === "signin" ? "Anmelden" : "Registrieren"}
+        {loading ? "Lädt..." : "Anmelden"}
       </Button>
     </form>
   );
