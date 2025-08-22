@@ -77,6 +77,7 @@ const NewWebhook = () => {
       const { error } = await supabase
         .from('webhooks')
         .insert({
+          client_id: clientData.id,
           name: formData.name,
           target_url: formData.target_url,
           method: formData.method as "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
