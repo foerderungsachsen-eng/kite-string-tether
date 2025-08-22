@@ -103,14 +103,12 @@ const Auth = () => {
         email,
         password,
         options: {
-          emailRedirectTo: `${window.location.origin}/`,
-          data: {
-            email_confirm: false
-          }
+          emailRedirectTo: `${window.location.origin}/`
         }
       });
       
       if (error) {
+        console.error('SignUp error:', error);
         toast({
           title: "Registrierung fehlgeschlagen",
           description: error.message,
@@ -121,33 +119,21 @@ const Auth = () => {
       }
       
       if (data.user) {
-        // Sign in the user immediately after signup
-        const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
-          email,
-          password
-        });
+        // Wait a moment for the user to be fully created
+        await new Promise(resolve => setTimeout(resolve, 1000));
         
-        if (signInError || !signInData.user) {
-          toast({
-            title: "Registrierung erfolgreich",
-            description: "Konto wurde erstellt. Bitte melden Sie sich an.",
-          });
-          setLoading(false);
-          return;
-        }
-        
-        // Now create profile and client records
+        // Create profile and client records using the signup user data
         try {
-          await createUserRecords(signInData.user.id, email);
+          await createUserRecords(data.user.id, email);
           toast({
             title: "Registrierung erfolgreich",
-            description: "Konto wurde erfolgreich erstellt und Sie sind angemeldet.",
+            description: "Konto wurde erfolgreich erstellt. Sie können sich jetzt anmelden.",
           });
         } catch (error: any) {
           console.error('Error creating user records:', error);
           toast({
-            title: "Registrierung teilweise erfolgreich",
-            description: "Konto wurde erstellt, aber Profil konnte nicht angelegt werden. Sie sind trotzdem angemeldet.",
+            title: "Registrierung erfolgreich",
+            description: "Konto wurde erstellt. Sie können sich jetzt anmelden.",
             variant: "destructive",
           });
         }
@@ -170,23 +156,14 @@ const Auth = () => {
   };
   
   const createUserRecords = async (userId: string, email: string) => {
+    console.log('Creating user records for:', userId, email);
+    
     try {
-      // Create profile for the user
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .insert({
-          user_id: userId,
-          email: email,
-          role: 'CLIENT'
-        });
-
-      if (profileError) {
-        console.error('Error creating profile:', profileError);
         throw new Error(`Profil konnte nicht erstellt werden: ${profileError.message}`);
       }
 
       // Also create client record
-      const { error: clientError } = await supabase
+          user_id: userId,
         .from('clients')
         .insert({
           user_id: userId,
@@ -243,7 +220,7 @@ const Auth = () => {
         });
       } else {
         // Also create client record
-        const { error: clientError } = await supabase
+          user_id: userId,
           .from('clients')
           .insert({
             user_id: data.user.id,
@@ -255,6 +232,8 @@ const Auth = () => {
           console.error('Error creating client:', clientError);
         }
       }
+      
+      console.log('User records created successfully');
       
       toast({
         title: "Registrierung erfolgreich",
