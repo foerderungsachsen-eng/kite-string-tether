@@ -38,27 +38,46 @@ const Webhooks = () => {
 
     try {
       if (isAdmin) {
-        // Admins can see all webhooks with client information
+        // Admins can see all webhooks - simplified query first
         const { data, error } = await supabase
           .from('webhooks')
-          .select(`
-            *,
-            clients!inner(
-              name,
-              profiles!inner(email)
-            )
-          `)
+          .select('*')
           .order('created_at', { ascending: false });
 
         if (error) throw error;
-
-        const formattedWebhooks = (data || []).map(webhook => ({
-          ...webhook,
-          client_name: (webhook.clients as any)?.name,
-          client_email: (webhook.clients as any)?.profiles?.email
-        }));
-
-        setWebhooks(formattedWebhooks);
+        
+        // Get client information for each webhook
+        const webhooksWithClients = await Promise.all(
+          (data || []).map(async (webhook) => {
+            try {
+              const { data: clientData } = await supabase
+                .from('clients')
+                .select('name, user_id')
+                .eq('id', webhook.client_id)
+                .single();
+              
+              if (clientData) {
+                const { data: profileData } = await supabase
+                  .from('profiles')
+                  .select('email')
+                  .eq('user_id', clientData.user_id)
+                  .single();
+                
+                return {
+                  ...webhook,
+                  client_name: clientData.name,
+                  client_email: profileData?.email || 'No email'
+                };
+              }
+              return webhook;
+            } catch (error) {
+              console.error('Error fetching client data for webhook:', webhook.id, error);
+              return webhook;
+            }
+          })
+        );
+        
+        setWebhooks(webhooksWithClients);
       } else {
         // Regular users see only their assigned webhooks
         const { data: clientData } = await supabase
