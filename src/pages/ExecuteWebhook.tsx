@@ -210,7 +210,16 @@ const ExecuteWebhook = () => {
 
 
       if (response.ok) {
-        setResponse(responseData);
+        // Check if response is binary data
+        if (typeof responseData === 'string' && (responseData.includes('\\u0000') || responseData.includes('��') || /[\x00-\x08\x0E-\x1F\x7F-\x9F]/.test(responseData))) {
+          setResponse({
+            _isBinaryFile: true,
+            _message: 'Binäre Datei empfangen',
+            _originalResponse: responseData
+          });
+        } else {
+          setResponse(responseData);
+        }
         toast({
           title: "Webhook erfolgreich ausgeführt",
           description: `Status: ${response.status}`,
@@ -422,12 +431,23 @@ const ExecuteWebhook = () => {
                   </div>
                   
                   <div className="bg-muted/50 rounded-lg p-4">
-                    <pre className="text-sm overflow-auto max-h-96">
-                      {typeof response === 'string' 
-                        ? response 
-                        : JSON.stringify(response, null, 2)
-                      }
-                    </pre>
+                    {response && typeof response === 'object' && response._isBinaryFile ? (
+                      <div className="text-center py-8">
+                        <div className="text-4xl mb-4">📁</div>
+                        <div className="text-lg font-medium mb-2">Binäre Datei empfangen</div>
+                        <p className="text-sm text-muted-foreground mb-4">
+                          Der Webhook hat eine Datei zurückgegeben. Der Inhalt kann nicht als Text angezeigt werden.
+                        </p>
+                        <Badge variant="outline">Datei erfolgreich empfangen</Badge>
+                      </div>
+                    ) : (
+                      <pre className="text-sm overflow-auto max-h-96">
+                        {typeof response === 'string' 
+                          ? response 
+                          : JSON.stringify(response, null, 2)
+                        }
+                      </pre>
+                    )}
                   </div>
                 </div>
               )}

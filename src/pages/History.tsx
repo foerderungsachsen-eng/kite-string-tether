@@ -4,6 +4,8 @@ import { useAuth } from "@/hooks/useAuth";
 import { Layout } from "@/components/Layout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Eye, RefreshCw } from "lucide-react";
 
@@ -24,9 +26,11 @@ interface Execution {
 }
 
 const History = () => {
-  const { user } = useAuth();
+  const { user, isAdmin } = useAuth();
   const [executions, setExecutions] = useState<Execution[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedExecution, setSelectedExecution] = useState<Execution | null>(null);
+  const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -38,31 +42,55 @@ const History = () => {
     if (!user) return;
 
     try {
-      // Get client data first
-      const { data: clientData } = await supabase
-        .from('clients')
-        .select('id')
-        .eq('user_id', user.id)
-        .single();
+      if (isAdmin) {
+        // Admin can see all executions
+        const { data: executionsData } = await supabase
+          .from('executions')
+          .select(`
+            *,
+            webhooks (
+              name
+            )
+          `)
+          .order('requested_at', { ascending: false })
+          .limit(50);
 
-      if (!clientData) return;
+        setExecutions(executionsData || []);
+      } else {
+        // Get client data first for regular users
+        const { data: clientData } = await supabase
+          .from('clients')
+          .select('id')
+          .eq('user_id', user.id)
+          .single();
 
-      // Get executions with webhook names
-      const { data: executionsData } = await supabase
-        .from('executions')
-        .select(`
-          *,
-          webhooks (
-            name
-          )
-        `)
-        .eq('client_id', clientData.id)
-        .order('requested_at', { ascending: false })
-        .limit(50);
+        if (!clientData) {
+          setExecutions([]);
+          return;
+        }
 
-      setExecutions(executionsData || []);
+        // Get executions with webhook names for this client
+        const { data: executionsData } = await supabase
+          .from('executions')
+          .select(`
+            *,
+            webhooks (
+              name
+            )
+          `)
+          .eq('client_id', clientData.id)
+          .order('requested_at', { ascending: false })
+          .limit(50);
+
+        setExecutions(executionsData || []);
+      }
     } catch (error) {
       console.error('Error fetching executions:', error);
+      toast({
+        title: "Fehler beim Laden der Historie",
+        description: "Die Ausführungshistorie konnte nicht geladen werden.",
+        variant: "destructive",
+      });
     } finally {
       setLoading(false);
     }
@@ -92,6 +120,32 @@ const History = () => {
       default:
         return status;
     }
+  };
+
+  const showExecutionDetails = (execution: Execution) => {
+    setSelectedExecution(execution);
+    setDetailsDialogOpen(true);
+  };
+
+  const formatResponse = (response: string | null) => {
+    if (!response) return 'Keine Antwort';
+    
+    try {
+      // Try to parse as JSON first
+      const parsed = JSON.parse(response);
+      return JSON.stringify(parsed, null, 2);
+    } catch {
+      // If not JSON, check if it's binary data
+      if (response.includes('\\u0000') || response.includes('��') || /[\x00-\x08\x0E-\x1F\x7F-\x9F]/.test(response)) {
+        return '[Binäre Datei empfangen - Inhalt kann nicht angezeigt werden]';
+      }
+      return response;
+    }
+  };
+
+  const isResponseBinary = (response: string | null) => {
+    if (!response) return false;
+    return response.includes('\\u0000') || response.includes('��') || /[\x00-\x08\x0E-\x1F\x7F-\x9F]/.test(response);
   };
 
   return (
@@ -158,10 +212,7 @@ const History = () => {
                       <Button 
                         variant="outline" 
                         size="sm"
-                        onClick={() => {
-                          // Show execution details in a modal or expand
-                          console.log('Show details for:', execution.id);
-                        }}
+                        onClick={() => showExecutionDetails(execution)}
                       >
                         <Eye className="h-4 w-4 mr-2" />
                         Details
@@ -185,6 +236,105 @@ const History = () => {
             ))}
           </div>
         )}
+
+        {/* Execution Details Dialog */}
+        <Dialog open={detailsDialogOpen} onOpenChange={setDetailsDialogOpen}>
+          <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Ausführungsdetails</DialogTitle>
+              <DialogDescription>
+                Details für Webhook: {selectedExecution?.webhooks?.name}
+              </DialogDescription>
+            </DialogHeader>
+            
+            {selectedExecution && (
+              <div className="space-y-6">
+                {/* Basic Info */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label className="text-sm font-medium">Status</Label>
+                    <div className="mt-1">
+                      <Badge variant={getStatusColor(selectedExecution.status) as any}>
+                        {getStatusText(selectedExecution.status)}
+                      </Badge>
+                    </div>
+                  </div>
+                  <div>
+                    <Label className="text-sm font-medium">Ausführungszeit</Label>
+                    <p className="mt-1 text-sm">{selectedExecution.duration_ms}ms</p>
+                  </div>
+                  <div>
+                    <Label className="text-sm font-medium">Token verwendet</Label>
+                    <p className="mt-1 text-sm">{selectedExecution.tokens_used}</p>
+                  </div>
+                  <div>
+                    <Label className="text-sm font-medium">Zeitpunkt</Label>
+                    <p className="mt-1 text-sm">
+                      {new Date(selectedExecution.requested_at).toLocaleString('de-DE')}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Request Details */}
+                <div>
+                  <Label className="text-sm font-medium">Anfrage</Label>
+                  <div className="mt-2 p-3 bg-muted rounded-lg">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Badge variant="outline">{selectedExecution.request_type}</Badge>
+                      {selectedExecution.status_code && (
+                        <Badge variant="outline">HTTP {selectedExecution.status_code}</Badge>
+                      )}
+                    </div>
+                    {selectedExecution.payload && (
+                      <pre className="text-xs overflow-auto">
+                        {JSON.stringify(JSON.parse(selectedExecution.payload), null, 2)}
+                      </pre>
+                    )}
+                  </div>
+                </div>
+
+                {/* Response */}
+                <div>
+                  <Label className="text-sm font-medium">Antwort</Label>
+                  <div className="mt-2 p-3 bg-muted rounded-lg">
+                    {isResponseBinary(selectedExecution.response) ? (
+                      <div className="text-center py-4">
+                        <div className="text-muted-foreground mb-2">
+                          📁 Binäre Datei empfangen
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Der Webhook hat eine Datei zurückgegeben. Der Inhalt kann nicht als Text angezeigt werden.
+                        </p>
+                      </div>
+                    ) : (
+                      <pre className="text-xs overflow-auto max-h-96">
+                        {formatResponse(selectedExecution.response)}
+                      </pre>
+                    )}
+                  </div>
+                </div>
+
+                {/* Error Details */}
+                {selectedExecution.error && (
+                  <div>
+                    <Label className="text-sm font-medium text-destructive">Fehlerdetails</Label>
+                    <div className="mt-2 p-3 bg-destructive/10 border border-destructive/20 rounded-lg">
+                      <pre className="text-xs text-destructive overflow-auto">
+                        {selectedExecution.error}
+                      </pre>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setDetailsDialogOpen(false)}>
+                Schließen
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </Layout>
   );
